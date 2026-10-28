@@ -1,0 +1,85 @@
+:root {
+  --eden-bg: #06161b;
+  --eden-ink: #dff6f0;
+  --eden-ink-soft: rgba(223, 246, 240, 0.72);
+  --eden-ink-faint: rgba(223, 246, 240, 0.45);
+  --eden-glass: rgba(10, 34, 40, 0.42);
+  --eden-glass-strong: rgba(8, 28, 34, 0.66);
+  --eden-line: rgba(180, 255, 236, 0.13);
+  --eden-accent: #9ff3e0;
+  --eden-warm: #ffd9a6;
+  --eden-font: 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans SC', 'Source Han Sans SC', 'Microsoft YaHei', 'WenQuanYi Zen Hei', system-ui, sans-serif;
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: var(--eden-bg);
+  color: var(--eden-ink);
+  font-family: var(--eden-font);
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+}
+
+#stage {
+  position: fixed;
+  inset: 0;
+}
+
+.eden-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  touch-action: none;
+}
+
+#root {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+}
+
+.eden-ui {
+  position: absolute;
+  inset: 0;
+}
+
+.eden-title {
+  position: absolute;
+  left: 50%;
+  top: 40%;
+  transform: translate(-50%, -50%);
+  text-align: center;
+  opacity: 0;
+  transition: opacity 2.4s ease;
+  pointer-events: none;
+}
+
+.eden-title.is-visible {
+  opacity: 1;
+}
+
+.eden-title-main {
+  font-size: 44px;
+  letter-spacing: 0.6em;
+  margin-right: -0.6em;
+  font-weight: 300;
+  color: rgba(230, 255, 248, 0.82);
+  text-shadow: 0 0 24px rgba(140, 255, 225, 0.25);
+}
+
+.eden-title-sub {
+  margin-top: 12px;
+  font-size: 13px;
+  letter-spacing: 0.4em;
+  color: var(--eden-ink-faint);
+}
