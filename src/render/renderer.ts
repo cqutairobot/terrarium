@@ -10,6 +10,7 @@ import { Ambience } from './particles';
 import { drawAlgae, drawFungus, drawPlant } from './producersRenderer';
 import { drawSprite, glowSprite } from './sprites';
 import { TerrainRenderer } from './terrainRenderer';
+import { WeatherRenderer } from './weatherRenderer';
 
 /** 0 = low, 1 = medium, 2 = high. */
 export type Quality = 0 | 1 | 2;
@@ -30,6 +31,7 @@ export class Renderer {
   private bg!: Background;
   private terrain!: TerrainRenderer;
   private ambience!: Ambience;
+  private weather = new WeatherRenderer();
   private visuals = new Map<number, CreatureVisual>();
   private frame = 0;
   private world!: World;
@@ -49,6 +51,7 @@ export class Renderer {
     this.bg = new Background(world.seed);
     this.terrain = new TerrainRenderer(world.terrain, world.seed);
     this.ambience = new Ambience(world);
+    this.weather = new WeatherRenderer();
     this.visuals.clear();
     this.effects = new Effects();
     this.selectedId = 0;
@@ -200,6 +203,8 @@ export class Renderer {
     this.effects.budget = this.quality === 0 ? 0.3 : 1;
     this.effects.update(o.dt);
     this.effects.draw(ctx);
+    this.weather.update(world, o.dt);
+    this.weather.drawWorld(ctx, world, vt);
     this.ambience.draw(ctx, cam, this.quality, 'front');
 
     // screen-space overlays
@@ -207,6 +212,7 @@ export class Renderer {
     ctx.globalAlpha = 1;
     ctx.globalCompositeOperation = 'source-over';
     this.bg.drawSurface(ctx, cam, world, vt);
+    this.weather.drawTint(ctx, world, cam, vt);
     if (!this.bg.isOverview(cam)) this.bg.drawVignette(ctx, cam);
 
     if (this.frame % 120 === 0) {

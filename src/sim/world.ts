@@ -14,13 +14,16 @@ import type { Creature, DeathCause } from './entities/creature';
 import type { SimEvent } from './events';
 import { History } from './history/history';
 import type { FamilyRecord, SpeciesRecord } from './registry';
-import { createCreature, createProducer } from './spawn';
+import { createCreature, createFood, createProducer } from './spawn';
 import { generateTerrain, groundY, type Terrain } from './terrain';
 import { updateCreatures } from './systems/creatures';
 import { bankGenome, emptyEcology, updateEcology, type EcologyState } from './systems/ecology';
 import { updateItems } from './systems/items';
 import { updateProducers } from './systems/producers';
 import { updateSpecies } from './systems/species';
+import { triggerDisaster, updateWeather } from './systems/weather';
+import type { DisasterKind } from './environment';
+import type { FoodKind } from './entities/food';
 
 export const WORLD_HEIGHT = 1000;
 /** Fixed simulation step (seconds of simulated time). */
@@ -123,6 +126,8 @@ export class World {
   speciesTimer = 0;
   ecologyTimer = 0;
   history: History;
+  /** Wall clock used for timestamps (injectable for reproducible tests). */
+  clock: () => number = () => Date.now();
 
   /** Producers that live at a point (algae + fungi); plants are scanned linearly. */
   pointProducers: Producer[] = [];
@@ -267,8 +272,29 @@ export class World {
       this.speciesTimer -= 120;
       updateSpecies(this);
     }
-    this.history.process();
+    updateWeather(this, dt);
+    this.history.process(dt);
     this.compact();
+  }
+
+  /** The observer scatters food around a point (matter enters from outside). */
+  feed(kind: FoodKind, x: number, y: number, count: number): number {
+    let n = 0;
+    for (let i = 0; i < count && this.foods.length < this.cfg.maxFood; i++) {
+      const fx = clamp(x + this.rng.normal() * 10, 4, this.width - 4);
+      const fy = clamp(y + this.rng.normal() * 6, 8, this.groundAt(fx) - 4);
+      const f = createFood(this.newId(), kind, fx, fy, this.rng);
+      this.addFood(f);
+      this.ledger.feed += f.energy;
+      n++;
+    }
+    if (n > 0) this.emit('feed', x, y, kind === 'spore' ? 0.48 : kind === 'rich' ? 0.08 : 0.12, 6);
+    return n;
+  }
+
+  /** The observer (or the weather) brings a disaster. */
+  disaster(kind: DisasterKind, x?: number, y?: number): void {
+    triggerDisaster(this, kind, { x, y });
   }
 
   /** A creature hatched (or was revived): update registries and announce it. */

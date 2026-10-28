@@ -98,7 +98,8 @@ export function layEggs(world: World, a: Creature, b: Creature): number {
       eggEnergy: pool,
       hatchTime: cfg.hatchTime * rng.range(0.85, 1.15),
     });
-    egg.mutations = [...result.notes.map((n) => n.gene), ...result.newRare.map((l) => 100 + l)];
+    // encoding: gene (raised), gene + 50 (lowered), 100 + locus (new rare allele)
+    egg.mutations = [...result.notes.map((n) => (n.delta >= 0 ? n.gene : n.gene + 50)), ...result.newRare.map((l) => 100 + l)];
     world.addCreature(egg);
     for (const p of [a, b]) {
       p.children++;

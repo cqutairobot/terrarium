@@ -35,6 +35,9 @@ export interface WeatherEvent {
   before: ImpactSnapshot;
   deaths: number;
   births: number;
+  /** Deaths expected anyway over the event (from the recent death rate). */
+  expectedDeaths: number;
+  impactKills: number;
   /** Lowest plant biomass seen while the event was active. */
   minPlantBiomass: number;
   minPlants: number;

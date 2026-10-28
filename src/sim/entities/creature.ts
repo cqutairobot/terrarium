@@ -146,7 +146,7 @@ export interface Creature {
   disasters: number[];
   escapes: number;
   kills: number;
-  /** Notable mutations at birth: gene indices (+100 + locus for rare). */
+  /** Notable mutations at birth: gene index if raised, gene + 50 if lowered, 100 + locus for a new rare allele. */
   mutations: number[];
   /** Watched-lineage tags (ids of watched ancestors). */
   tags: number[];

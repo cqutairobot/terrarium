@@ -12,9 +12,11 @@ function fingerprint(w: World): string {
 describe('save and restore', () => {
   it('a restored world continues exactly like the original', () => {
     const a = new World({ seed: 'determinism', aspect: 16 / 9 });
+    a.clock = () => 1_700_000_000_000;
     stepFor(a, 90);
     const json = JSON.stringify(snapshotWorld(a));
     const b = restoreWorld(JSON.parse(json) as WorldSnapshot);
+    b.clock = a.clock;
     expect(fingerprint(b)).toBe(fingerprint(a));
     stepFor(a, 60);
     stepFor(b, 60);
