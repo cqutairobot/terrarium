@@ -104,6 +104,65 @@ try {
       await page.waitForTimeout(3000);
       await page.screenshot({ path: `${out}/${size}-follow.png` });
     }
+    if (scenario === 'soul') {
+      // life stories, archive, codex and the evolution views
+      const shot = async (name) => {
+        await page.waitForTimeout(700);
+        await page.screenshot({ path: `${out}/${size}-${name}.png` });
+      };
+      const id = await page.evaluate(() => {
+        const e = window.__eden;
+        const adults = e.world.creatures.filter((x) => x.stage === 'adult' && x.dying === 0 && x.ph.trophic !== 'carnivore');
+        const c = adults.sort((a, b) => b.children - a.children)[0];
+        e.rename(c.id, '小灯');
+        e.select(c.id);
+        return c.id;
+      });
+      await shot('card-now');
+      await page.getByRole('button', { name: '一生', exact: true }).click();
+      await shot('card-life');
+      await page.getByRole('button', { name: '家族', exact: true }).click();
+      await shot('card-kin');
+      await advance(900);
+      // a rare trait for the codex, as if one had just been born
+      await page.evaluate(() => {
+        const e = window.__eden;
+        const c = e.world.creatures.find((x) => x.stage === 'adult' && x.dying === 0);
+        c.genome.rare[0] = c.genome.rare[1] = 1;
+        e.world.history.onRareBirth(c, { golden: true, translucent: false, twinTail: false, extraTentacles: 0, fluorescent: false, eyeType: 0, rainbow: false, mask: 1 });
+      });
+      await page.mouse.move(w / 2, h - 12);
+      await page.waitForTimeout(900);
+      await page.getByRole('button', { name: '生命档案馆' }).click();
+      await shot('archive');
+      const row = page.locator('.story-row').first();
+      if (await row.count()) {
+        await row.click();
+        await shot('story');
+      }
+      await page.getByRole('button', { name: '生命图鉴' }).click();
+      await shot('codex');
+      await page.getByRole('button', { name: '生态统计' }).click();
+      await page.locator('.panel-body').evaluate((el) => (el.scrollTop = el.scrollHeight));
+      await shot('stats-evolution');
+      await page.getByRole('button', { name: '世界编年史' }).click();
+      await shot('chronicle');
+      // the followed one leaves: the heirs are offered
+      await page.evaluate((cid) => {
+        const e = window.__eden;
+        const alive = e.world.creatureMap.get(cid);
+        const c = alive && alive.dying === 0 ? alive : e.world.creatures.find((x) => x.stage === 'adult' && x.children > 0 && x.dying === 0);
+        e.follow(c.id);
+        c.health = -1;
+      }, id);
+      await page.waitForTimeout(1500);
+      await shot('follow-lost');
+      const story = await page.evaluate((cid) => {
+        const s = window.__eden.world.history.stories.get(cid);
+        return s ? { events: s.events.length, descendants: s.descendants, living: s.living, depth: s.maxDepth } : null;
+      }, id);
+      console.log(`[${size}] watched story: ${JSON.stringify(story)}`);
+    }
     if (errors.length) {
       failed = true;
       console.log(`[${size}] console errors:\n  ` + errors.slice(0, 10).join('\n  '));

@@ -2,7 +2,9 @@ import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import type { Engine } from '../engine/engine';
 import { DISASTER_LABELS } from '../sim/environment';
 import { Captions } from './components/Captions';
+import { ArchivePanel } from './components/ArchivePanel';
 import { ChroniclePanel } from './components/ChroniclePanel';
+import { CodexPanel } from './components/CodexPanel';
 import { CreatureCard } from './components/CreatureCard';
 import { Dock, type PanelId } from './components/Dock';
 import { EnvPanel } from './components/EnvPanel';
@@ -38,6 +40,30 @@ function usePersistentFlag(key: string, initial: boolean): [boolean, (v: boolean
   return [v, set];
 }
 
+const HEIR_WORDS = { child: '它的孩子', descendant: '它的后代', family: '它的家人', none: '' } as const;
+
+/** The followed creature has left: offer to stay with its heirs. */
+function LostFollowPrompt({ engine }: { engine: Engine }) {
+  const lost = engine.lostFollow!;
+  const heir = lost.heirs.map((id) => engine.world.creatureMap.get(id)).find((c) => c && c.dying === 0);
+  return (
+    <div className="lost-follow glass">
+      <span>
+        {lost.name}安静地离开了。
+        {heir ? '' : '它没有留下在世的亲人。'}
+      </span>
+      {heir && (
+        <button className="btn" onClick={() => engine.followHeir()}>
+          继续跟随{HEIR_WORDS[lost.kind]}「{heir.customName || heir.name}」
+        </button>
+      )}
+      <button className="btn ghost" onClick={() => engine.dismissLost()}>
+        {heir ? '不了' : '好'}
+      </button>
+    </div>
+  );
+}
+
 function toggleFullscreen(): void {
   if (document.fullscreenElement) void document.exitFullscreen();
   else void document.documentElement.requestFullscreen?.().catch(() => undefined);
@@ -51,6 +77,11 @@ export function App({ engine, wallpaper }: { engine: Engine; wallpaper: boolean 
   const [boot, setBoot] = useState(!wallpaper);
   const [captions, setCaptions] = usePersistentFlag('eden.captions', true);
   const [showTitle, setShowTitle] = useState(!wallpaper);
+  const [storyFocus, setStoryFocus] = useState<number | null>(null);
+  const openStory = useCallback((id: number) => {
+    setStoryFocus(id);
+    setPanel('archive');
+  }, []);
 
   useEffect(() => {
     const t1 = setTimeout(() => setShowTitle(false), 5200);
@@ -124,6 +155,8 @@ export function App({ engine, wallpaper }: { engine: Engine; wallpaper: boolean 
     log: ['事件日志', <LogPanel engine={engine} />],
     chronicle: ['世界编年史', <ChroniclePanel engine={engine} />],
     world: ['世界与存档', <WorldPanel engine={engine} />],
+    archive: ['生命档案馆', <ArchivePanel engine={engine} focus={storyFocus} setFocus={setStoryFocus} />],
+    codex: ['生命图鉴', <CodexPanel engine={engine} />],
   };
   const open = panel && panel !== 'env' ? drawer[panel] : null;
   const activeWeather = engine.world.env.events.filter((e) => !e.done);
@@ -157,7 +190,9 @@ export function App({ engine, wallpaper }: { engine: Engine; wallpaper: boolean 
         </div>
       )}
 
-      {!hidden && selected && <CreatureCard engine={engine} c={selected} />}
+      {!hidden && selected && <CreatureCard engine={engine} c={selected} openStory={openStory} />}
+
+      {!hidden && engine.lostFollow && <LostFollowPrompt engine={engine} />}
 
       {!hidden && open && (
         <div className="drawer glass">

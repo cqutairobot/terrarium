@@ -42,6 +42,8 @@ const PANELS: [PanelId, string, () => ReactNode][] = [
   ['stats', '生态统计', Icon.stats],
   ['log', '事件日志', Icon.log],
   ['chronicle', '世界编年史', Icon.chronicle],
+  ['archive', '生命档案馆', Icon.archive],
+  ['codex', '生命图鉴', Icon.codex],
 ];
 
 /** The floating control dock that rises from the bottom edge. */

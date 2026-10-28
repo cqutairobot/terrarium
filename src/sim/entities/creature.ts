@@ -45,6 +45,17 @@ export const DEATH_LABELS: Record<DeathCause, string> = {
   injury: '伤病',
 };
 
+/** How a life ended, as a phrase that follows the creature's name. */
+export const DEATH_PHRASES: Record<DeathCause, string> = {
+  age: '在年老中安静地离开了这个世界',
+  starvation: '因为饥饿离开了这个世界',
+  predation: '被掠食者带走了',
+  cold: '没能熬过寒冷',
+  heat: '没能熬过炎热',
+  impact: '在灾害的冲击中离开了',
+  injury: '因为伤病离开了这个世界',
+};
+
 export type LifeStage = 'egg' | 'juvenile' | 'adult' | 'elder';
 
 export interface Creature {

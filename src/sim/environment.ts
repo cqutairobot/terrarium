@@ -41,6 +41,10 @@ export interface WeatherEvent {
   /** Lowest plant biomass seen while the event was active. */
   minPlantBiomass: number;
   minPlants: number;
+  /** Plant biomass trend before the event (per second), so the summary blames only the change beyond it. */
+  plantTrend?: number;
+  /** Deepest dip below that trend while the event lasted. */
+  minPlantDev?: number;
   done: boolean;
 }
 

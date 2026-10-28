@@ -1,8 +1,16 @@
 import { bodyRadius } from '../behavior/perception';
 import { clamp } from '../core/math';
-import type { DisasterKind, ImpactSnapshot, WeatherEvent } from '../environment';
+import { DISASTER_LABELS, type DisasterKind, type ImpactSnapshot, type WeatherEvent } from '../environment';
 import type { World } from '../world';
 import { healthMax, killCreature } from './life';
+
+const NATURAL_LABELS: Record<DisasterKind, string> = {
+  storm: '阵雨',
+  coldwave: '冷空气',
+  heatwave: '暖流',
+  meteor: '流星',
+  bloom: '好时节',
+};
 
 export interface DisasterSpec {
   duration: number;
@@ -57,6 +65,11 @@ export function triggerDisaster(
   const recent = world.history.series.window(600, 'sim', world.time, world.clock());
   const span = recent.length > 1 ? recent[recent.length - 1].t - recent[0].t + 10 : 0;
   const rate = span > 0 ? recent.reduce((a, s) => a + s.deaths, 0) / span : 0;
+  // and where the meadow was heading anyway (bounded, so a boom or a bust is not extrapolated too far)
+  const window = recent.length > 1 ? recent[recent.length - 1].t - recent[0].t : 0;
+  const rawTrend = window > 0 ? (recent[recent.length - 1].plantMass - recent[0].plantMass) / window : 0;
+  const maxTrend = (0.25 * before.plantBiomass) / (duration + AFTERMATH);
+  const plantTrend = clamp(rawTrend, -maxTrend, maxTrend);
   const e: WeatherEvent = {
     id: world.newId(),
     kind,
@@ -74,10 +87,13 @@ export function triggerDisaster(
     impactKills: 0,
     minPlantBiomass: before.plantBiomass,
     minPlants: before.plants,
+    plantTrend,
+    minPlantDev: 0,
     done: false,
   };
   if (kind === 'meteor') e.y = clamp(opts.y ?? world.groundAt(e.x) - 20, 60, world.groundAt(e.x) - 8);
   world.env.events.push(e);
+  world.history.noteDisaster(e.id, natural ? NATURAL_LABELS[kind] : DISASTER_LABELS[kind], kind === 'bloom' ? 2 : natural ? 1 : 0);
   world.history.add('disasterStart', natural ? 1 : 2, { kind, natural: natural ? 1 : 0 });
   // creatures alive now will remember having lived through it
   for (const c of world.creatures) {
@@ -103,17 +119,21 @@ export function updateWeather(world: World, dt: number): void {
       const now = snapshot(world);
       if (now.plantBiomass < e.minPlantBiomass) e.minPlantBiomass = now.plantBiomass;
       if (now.plants < e.minPlants) e.minPlants = now.plants;
+      const dev = now.plantBiomass - (e.before.plantBiomass + (e.plantTrend ?? 0) * local);
+      if (dev < (e.minPlantDev ?? 0)) e.minPlantDev = dev;
     }
     if (local > e.duration + AFTERMATH) {
       e.done = true;
       const before = e.before.plantBiomass;
       const now = snapshot(world);
-      const lowest = Math.min(e.minPlantBiomass, now.plantBiomass);
-      const loss = before > 0 ? (lowest - before) / before : 0;
-      const gain = before > 0 ? (now.plantBiomass - before) / before : 0;
-      const plantPct = Math.round((Math.abs(loss) > Math.abs(gain) && loss < 0 ? loss : gain) * 100);
+      // only the change beyond the meadow's own trend is the event's doing
+      const endDev = now.plantBiomass - (before + (e.plantTrend ?? 0) * local);
+      const dip = Math.min(e.minPlantDev ?? 0, endDev);
+      const change = dip < 0 && Math.abs(dip) > Math.abs(endDev) ? dip : endDev;
+      const plantPct = before > 0 ? Math.round((change / before) * 100) : 0;
       const excess = Math.max(0, Math.round(e.deaths - e.expectedDeaths));
       const severe = excess >= 12 || Math.abs(plantPct) >= 30 || e.impactKills >= 5;
+      world.history.disasterSurvived(e.id);
       world.history.add('disasterEnd', e.natural && !severe ? 1 : severe ? 3 : 2, {
         kind: e.kind,
         natural: e.natural ? 1 : 0,

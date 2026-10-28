@@ -42,7 +42,7 @@ describe('reproduction', () => {
     let born = false;
     for (let i = 0; i < 30 * 12 && !born; i++) {
       w.step(1 / 30);
-      born = w.events.some((e) => e.t === 'birth' && e.id === egg.id);
+      born = w.lastEvents.some((e) => e.t === 'birth' && e.id === egg.id);
     }
     expect(born).toBe(true);
     expect(egg.stage).toBe('juvenile');

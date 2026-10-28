@@ -120,6 +120,8 @@ export class World {
   ecology: EcologyState = emptyEcology();
   /** Facts produced during the current step (consumed by the history layer). */
   events: SimEvent[] = [];
+  /** Facts raised during the most recent step, for observers outside the simulation. */
+  lastEvents: SimEvent[] = [];
   /** Living, non-egg predators / consumers (refreshed every step). */
   predatorCount = 0;
   consumerCount = 0;
@@ -247,7 +249,6 @@ export class World {
   }
 
   step(dt: number): void {
-    this.events.length = 0;
     this.time += dt;
     this.tick++;
     this.env.update(dt);
@@ -275,6 +276,11 @@ export class World {
     updateWeather(this, dt);
     this.history.process(dt);
     this.compact();
+    // facts are consumed once; anything raised between steps is heard on the next one
+    const done = this.events;
+    this.events = this.lastEvents;
+    this.events.length = 0;
+    this.lastEvents = done;
   }
 
   /** The observer scatters food around a point (matter enters from outside). */

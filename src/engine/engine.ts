@@ -18,6 +18,15 @@ export interface Toast {
   at: number;
 }
 
+/** The followed creature has left; who could the camera stay with? */
+export interface LostFollow {
+  id: number;
+  name: string;
+  heirs: number[];
+  kind: 'child' | 'descendant' | 'family' | 'none';
+  at: number;
+}
+
 export const AUTOSAVE_ID = 'autosave';
 const AUTOSAVE_EVERY = 60;
 
@@ -40,6 +49,7 @@ export class Engine {
   uiHidden = false;
   toasts: Toast[] = [];
   lastSavedAt = 0;
+  lostFollow: LostFollow | null = null;
   private listeners = new Set<() => void>();
   private publishAcc = 0;
   private autosaveAcc = 0;
@@ -66,6 +76,7 @@ export class Engine {
       },
       render: (alpha, dt, vt) => {
         for (const e of this.world.drainFx()) this.renderer.effects.handle(e);
+        this.watchFollow();
         this.renderer.render(alpha, dt, vt);
         this.publishAcc += dt;
         if (this.publishAcc >= 0.25) {
@@ -147,7 +158,84 @@ export class Engine {
   follow(id: number): void {
     this.renderer.followId = id;
     if (id) this.renderer.selectedId = id;
+    this.lostFollow = null;
     this.publish();
+  }
+
+  /** Notice when the creature the camera follows leaves the world. */
+  private watchFollow(): void {
+    const id = this.renderer.followId;
+    const lost = this.lostFollow;
+    if (id && (!lost || lost.id !== id)) {
+      const f = this.world.creatureMap.get(id);
+      if (!f || f.dying > 0) {
+        this.lostFollow = this.heirsOf(id, f?.customName || f?.name || this.world.history.lineage.nodes.get(id)?.name || '它');
+        this.publish();
+      }
+    }
+    // once it has dissolved, an unattended screen simply keeps watching its heir
+    if (lost && lost.heirs.length > 0 && this.uiHidden && !this.world.creatureMap.has(lost.id)) this.followHeir();
+  }
+
+  private heirsOf(id: number, name: string): LostFollow {
+    const w = this.world;
+    const alive = w.creatures.filter((c) => c.dying === 0 && c.id !== id);
+    const byYouth = (a: Creature, b: Creature) => Number(a.stage === 'egg') - Number(b.stage === 'egg') || b.bornT - a.bornT;
+    const kids = alive.filter((c) => c.parentA === id || c.parentB === id).sort(byYouth);
+    if (kids.length) return { id, name, heirs: kids.map((c) => c.id), kind: 'child', at: w.time };
+    const desc = w.history.lineage.livingDescendants(w, id).sort((a, b) => a.generation - b.generation || b.bornT - a.bornT);
+    if (desc.length) return { id, name, heirs: desc.map((c) => c.id), kind: 'descendant', at: w.time };
+    const fam = w.creatureMap.get(id)?.familyId ?? 0;
+    const kin = fam ? alive.filter((c) => c.familyId === fam && c.stage !== 'egg').sort(byYouth) : [];
+    if (kin.length) return { id, name, heirs: kin.map((c) => c.id), kind: 'family', at: w.time };
+    return { id, name, heirs: [], kind: 'none', at: w.time };
+  }
+
+  /** Continue with the heir of the creature that left. */
+  followHeir(): void {
+    const lost = this.lostFollow;
+    if (!lost) return;
+    const heir = lost.heirs.map((h) => this.world.creatureMap.get(h)).find((c) => c && c.dying === 0);
+    this.lostFollow = null;
+    if (heir) this.follow(heir.id);
+    else this.publish();
+  }
+
+  dismissLost(): void {
+    this.lostFollow = null;
+    this.publish();
+  }
+
+  // ------------------------------------------------------------ life stories
+
+  watch(id: number): void {
+    const c = this.world.creatureMap.get(id);
+    if (!c || c.dying > 0) return;
+    const s = this.world.history.watch(c);
+    this.toast(`开始关注「${s.custom || s.name}」，它的一生会被记下来`);
+  }
+
+  unwatch(id: number): void {
+    this.world.history.unwatch(id);
+    this.publish();
+  }
+
+  rename(id: number, name: string): void {
+    const c = this.world.creatureMap.get(id);
+    if (!c) return;
+    const was = this.world.history.isWatched(id);
+    this.world.history.rename(c, name);
+    const now = c.customName || c.name;
+    this.toast(was ? `它现在叫「${now}」了` : `它现在叫「${now}」了，你也开始关注它的一生`);
+  }
+
+  /** Select (and follow) a living creature that shows a codex trait. */
+  findCarrier(match: (c: Creature) => boolean): boolean {
+    const found = this.world.creatures.filter((c) => c.dying === 0 && c.stage !== 'egg' && match(c));
+    if (!found.length) return false;
+    const pick = found[(this.version * 7) % found.length];
+    this.follow(pick.id);
+    return true;
   }
 
   // ------------------------------------------------------------ interventions
@@ -291,6 +379,7 @@ export class Engine {
     this.world = w;
     this.renderer.setWorld(w);
     this.aiming = null;
+    this.lostFollow = null;
     this.autosaveAcc = 0;
     this.publish();
   }

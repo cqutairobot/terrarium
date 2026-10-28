@@ -1,6 +1,7 @@
 import { bodyRadius, canBreed, maxEnergyOf } from '../behavior/perception';
 import type { Creature } from '../entities/creature';
 import { breed, compatibility, express } from '../genome';
+import { MAX_TAGS } from '../history/lineage';
 import { createCreature } from '../spawn';
 import type { World } from '../world';
 
@@ -100,6 +101,9 @@ export function layEggs(world: World, a: Creature, b: Creature): number {
     });
     // encoding: gene (raised), gene + 50 (lowered), 100 + locus (new rare allele)
     egg.mutations = [...result.notes.map((n) => (n.delta >= 0 ? n.gene : n.gene + 50)), ...result.newRare.map((l) => 100 + l)];
+    // a watched bloodline flows through either parent
+    for (const t of [...a.tags, ...b.tags]) if (!egg.tags.includes(t)) egg.tags.push(t);
+    if (egg.tags.length > MAX_TAGS) egg.tags.splice(0, egg.tags.length - MAX_TAGS);
     world.addCreature(egg);
     for (const p of [a, b]) {
       p.children++;

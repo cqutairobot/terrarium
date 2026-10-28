@@ -41,7 +41,8 @@ export type StoryKind =
   | 'watchEscape'
   | 'watchElder'
   | 'watchDeath'
-  | 'watchDescendants';
+  | 'watchDescendants'
+  | 'watchLineEnd';
 
 export type Importance = 1 | 2 | 3;
 
@@ -193,9 +194,11 @@ export function narrate(e: StoryEvent): string {
     case 'watchElder':
       return fill('{name}慢慢老了。', p);
     case 'watchDeath':
-      return fill('{name}因{cause}离开了这个世界，享年{age}，留下了 {children} 个孩子。', p);
+      return p.how ? fill('{name}{how}，享年{age}，留下了 {children} 个孩子。', p) : fill('{name}因{cause}离开了这个世界，享年{age}，留下了 {children} 个孩子。', p);
     case 'watchDescendants':
       return fill('{name}的血脉已经延续到了第 {n} 代后裔。', p);
+    case 'watchLineEnd':
+      return fill('{name}的最后一个后裔也离开了，这条血脉延续了 {n} 代。', p);
   }
   return '';
 }

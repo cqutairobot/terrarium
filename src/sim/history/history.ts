@@ -1,5 +1,5 @@
 import { RingBuffer } from '../core/ringBuffer';
-import { DEATH_LABELS, type Creature } from '../entities/creature';
+import { DEATH_LABELS, DEATH_PHRASES, type Creature } from '../entities/creature';
 import { cloneGenome, express, G, N_GENES, type Genome } from '../genome';
 import { colorWord } from '../names';
 import { alleleCount, RARE_DEFS, rareKeyLabel, rareTraitKeys, type RareExpression } from '../rareTraits';
@@ -7,6 +7,8 @@ import { familyDepth } from '../registry';
 import type { World } from '../world';
 import { describeMutation, formatAge, formatDuration, mostVisible, type Importance, type StoryEvent, type StoryKind } from './narrator';
 import { Series, type Sample, type SeriesSave } from './series';
+import { Lineage, type LineageNode } from './lineage';
+import { newStory, placeOf, pushStory, RECORD_LABELS, type LifeStory, type StoryEntry } from './stories';
 
 export interface CodexEntry {
   key: string;
@@ -49,9 +51,18 @@ export interface HistorySave {
   drift: Record<string, DriftState>;
   codex: CodexEntry[];
   acc: { births: number; deaths: number; ageSum: number; ageN: number };
-  timers: { detect: number; sample: number; drift: number };
+  timers: { detect: number; sample: number; drift: number; prune?: number };
   throttle: Record<string, number>;
+  lineage?: { nodes: LineageNode[]; pinned: number[] };
+  stories?: LifeStory[];
+  maxChildren?: number;
+  disasterKinds?: Record<string, [string, number]>;
 }
+
+const DEPTH_MARKS = [1, 3, 5, 10, 20, 30, 50, 75, 100, 150, 200];
+const CHILD_MARKS = [3, 5, 10, 20, 30, 50];
+const MAX_WATCHED = 200;
+const MAX_AUTO = 60;
 
 const CHRONICLE_CAP = 3000;
 const GEN_MARKS = [5, 10, 20, 30, 50, 75, 100, 150, 200, 300, 500, 750, 1000];
@@ -77,8 +88,13 @@ export class History {
   private longevity = { age: 0, name: '', at: 0 };
   private drift = new Map<number, DriftState>();
   private acc = { births: 0, deaths: 0, ageSum: 0, ageN: 0 };
-  private timers = { detect: 0, sample: 0, drift: 0 };
+  private timers = { detect: 0, sample: 0, drift: 0, prune: 0 };
   private throttle: Record<string, number> = {};
+  lineage = new Lineage();
+  stories = new Map<number, LifeStory>();
+  private maxChildren = 0;
+  /** Disaster id → [label, mood] (0 harsh, 1 mild weather, 2 a good time). */
+  private disasterKinds: Record<string, [string, number]> = {};
 
   constructor(private readonly world: World) {}
 
@@ -120,11 +136,17 @@ export class History {
       this.flags.born = 1;
       this.add('worldBorn', 3, { world: w.name });
       for (const sp of w.species.values()) this.drift.set(sp.id, { baseline: sp.centroid.slice(), announced: {} });
+      for (const c of w.creatures) this.lineage.ensure(c);
     }
     for (const e of w.events) this.onEvent(e);
     this.timers.detect += dt;
     this.timers.sample += dt;
     this.timers.drift += dt;
+    this.timers.prune += dt;
+    if (this.timers.prune >= 60) {
+      this.timers.prune -= 60;
+      this.lineage.prune(w);
+    }
     if (this.timers.detect >= 5) {
       this.timers.detect -= 5;
       this.detect();
@@ -146,10 +168,13 @@ export class History {
         this.acc.births++;
         const c = w.creatureMap.get(e.id);
         if (!c) return;
+        this.lineage.ensure(c);
         if (e.parentA && !this.flags.firstBirth) {
           this.flags.firstBirth = 1;
           this.add('firstBirth', 3, { name: c.name, id: c.id, pa: nameOf(w, e.parentA), pb: nameOf(w, e.parentB) });
+          this.keepRecord(c, 'first');
         }
+        for (const tag of c.tags) this.onDescendant(tag, c);
         const visible = c.mutations.filter((m) => m < 100);
         if (visible.length > 0) {
           const code = mostVisible(visible);
@@ -175,12 +200,19 @@ export class History {
         }
         const c = w.creatureMap.get(e.id);
         if (!c) return;
+        this.lineage.markDeath(c.id, w.time);
+        this.onStoryDeath(c, e.cause, e.age, e.children);
         if (e.cause === 'age' && e.age > this.longevity.age) {
           const prev = this.longevity.age;
           this.longevity = { age: e.age, name: c.name, at: w.time };
           if (prev > 0 && e.age > prev * 1.05 && this.allow('longevity', 600)) {
             this.add('longevity', 2, { name: c.name, id: c.id, age: formatAge(e.age) });
+            this.keepRecord(c, 'longevity');
           }
+        }
+        if (e.children > this.maxChildren) {
+          this.maxChildren = e.children;
+          if (e.children >= 12) this.keepRecord(c, 'children');
         }
         if (e.cause === 'age' && e.children >= 8 && this.allow('elderDeath', 90)) {
           this.add('elderDeath', 1, { name: c.name, id: c.id, age: formatAge(e.age), children: e.children });
@@ -191,6 +223,18 @@ export class History {
         if (e.count >= 2 && this.allow('twins', 120)) this.add('twins', 1, { pa: nameOf(w, e.parentA), pb: nameOf(w, e.parentB) });
         return;
       case 'escape':
+        {
+          const s = this.stories.get(e.id);
+          const pred = w.creatureMap.get(e.predator);
+          if (s && s.watched && s.diedT < 0) {
+            s.escapes++;
+            const predator = (pred && w.species.get(pred.speciesId)?.name) || '掠食者';
+            const prev = s.events[s.events.length - 1];
+            if (prev && prev.k === 'escape' && prev.p.predator === predator) prev.p.n = Number(prev.p.n ?? 1) + 1;
+            else this.story(s, 'escape', { predator, n: 1 });
+            if (this.allow('watchEscape' + s.id, 120)) this.add('watchEscape', 2, { name: s.custom || s.name, id: s.id });
+          }
+        }
         if (this.allow('escape', 150)) {
           const prey = w.creatureMap.get(e.id);
           const pred = w.creatureMap.get(e.predator);
@@ -208,6 +252,8 @@ export class History {
       case 'speciesExtinct': {
         const sp = w.species.get(e.species);
         if (!sp) return;
+        const last = w.creatureMap.get(e.lastId);
+        if (last) this.keepRecord(last, 'last');
         if (!this.flags.firstExtinction) {
           this.flags.firstExtinction = 1;
           this.add('firstExtinction', 3, { species: sp.name });
@@ -334,6 +380,244 @@ export class History {
       }
     }
     this.detectRare();
+    this.updateBloodlines();
+    this.pollWatched();
+  }
+
+  /** Count who still carries each watched bloodline; notice when one ends. */
+  private updateBloodlines(): void {
+    const w = this.world;
+    const living = new Map<number, number>();
+    for (const c of w.creatures) {
+      if (c.dying > 0) continue;
+      for (const t of c.tags) if (t !== c.id) living.set(t, (living.get(t) ?? 0) + 1);
+    }
+    for (const s of this.stories.values()) {
+      if (!s.watched) continue;
+      s.living = living.get(s.id) ?? 0;
+      if (s.living === 0 && s.diedT >= 0 && s.descendants > 0 && s.lineEnd < 0) {
+        s.lineEnd = w.time;
+        this.story(s, 'lineEnd', { n: s.maxDepth });
+        this.add('watchLineEnd', 2, { name: s.custom || s.name, n: s.maxDepth });
+      }
+    }
+  }
+
+  /** A story as it would read if this creature were watched (not stored). */
+  previewStory(c: Creature): LifeStory {
+    const s = newStory(this.world, c, null);
+    s.watched = false;
+    this.backfill(s, c);
+    return s;
+  }
+
+  /** The ancestral genes a species is measured against (for 'then and now'). */
+  baselineOf(speciesId: number): number[] | undefined {
+    return this.drift.get(speciesId)?.baseline;
+  }
+
+  // ------------------------------------------------------------ life stories
+
+  private story(s: LifeStory, k: StoryEntry['k'], p: StoryEntry['p'] = {}, t = this.world.time): void {
+    const w = this.world.clock() - Math.max(0, this.world.time - t) * 1000;
+    pushStory(s, { t, w, k, p });
+  }
+
+  isWatched(id: number): boolean {
+    return this.stories.get(id)?.watched ?? false;
+  }
+
+  /** Begin following a creature's life (and, from now on, its bloodline). */
+  watch(c: Creature): LifeStory {
+    const w = this.world;
+    let s = this.stories.get(c.id);
+    if (s && s.watched) return s;
+    const watchedCount = [...this.stories.values()].filter((x) => x.watched).length;
+    if (watchedCount >= MAX_WATCHED) {
+      const oldest = [...this.stories.values()].filter((x) => x.watched && x.diedT >= 0).sort((a, b) => a.diedT - b.diedT)[0];
+      if (oldest) this.stories.delete(oldest.id);
+    }
+    if (!s) {
+      s = newStory(w, c, null);
+      this.stories.set(c.id, s);
+      this.backfill(s, c);
+    } else {
+      s.watched = true;
+      s.watchedT = w.time;
+    }
+    this.story(s, 'watched');
+    this.lineage.ensure(c);
+    this.lineage.tagLineage(w, c);
+    // descendants already swimming count from the start
+    if (s.lineEnd < 0) {
+      const kin = this.lineage.livingDescendants(w, c.id);
+      s.living = kin.length;
+      s.descendants = Math.max(s.descendants, kin.length);
+      for (const k of kin) s.maxDepth = Math.max(s.maxDepth, k.generation - s.generation);
+    }
+    return s;
+  }
+
+  unwatch(id: number): void {
+    const s = this.stories.get(id);
+    if (!s) return;
+    if (s.auto) s.watched = false;
+    else {
+      this.stories.delete(id);
+      this.lineage.pinned.delete(id);
+    }
+    for (const c of this.world.creatures) {
+      const i = c.tags.indexOf(id);
+      if (i >= 0) c.tags.splice(i, 1);
+    }
+  }
+
+  rename(c: Creature, name: string): void {
+    const clean = name.trim().slice(0, 12);
+    c.customName = clean || null;
+    const s = this.watch(c);
+    s.custom = c.customName;
+    this.lineage.rename(c.id, c.customName || c.name);
+    if (clean) this.story(s, 'named', { name: clean });
+  }
+
+  /** What an observer would have seen of this life so far, from its milestones. */
+  private backfill(s: LifeStory, c: Creature): void {
+    const w = this.world;
+    const [pa, paName, pb, pbName] = s.parents;
+    this.story(s, 'born', { place: s.place, pa: pa ? paName : '', pb: pb ? pbName : '' }, c.bornT);
+    if (c.firstMealT >= 0) this.story(s, 'firstMeal', {}, c.firstMealT);
+    if (c.firstReproT >= 0) this.story(s, 'parent', { mate: this.mateOf(c) }, c.firstReproT);
+    const mark = CHILD_MARKS.filter((m) => c.children >= m).pop();
+    if (mark) this.story(s, 'children', { n: mark });
+    for (const id of c.disasters) {
+      const d = this.disasterKinds[String(id)];
+      const ongoing = w.env.events.some((e) => e.id === id && !e.done);
+      if (d && !ongoing) this.story(s, 'disaster', { kind: d[0], mood: d[1] });
+    }
+    if (c.escapes > 0) this.story(s, 'escape', { predator: '掠食者', n: c.escapes });
+    if (c.stage === 'elder') this.story(s, 'elder');
+    s.events.sort((a, b) => a.t - b.t);
+  }
+
+  /** Watched lives: notice their milestones as they happen. */
+  private pollWatched(): void {
+    const w = this.world;
+    for (const s of this.stories.values()) {
+      if (!s.watched || s.diedT >= 0) continue;
+      const c = w.creatureMap.get(s.id);
+      if (!c || c.dying > 0) continue;
+      const has = (k: StoryEntry['k']) => s.events.some((e) => e.k === k);
+      const name = c.customName || c.name;
+      if (c.firstMealT >= 0 && !has('firstMeal')) {
+        this.story(s, 'firstMeal', {}, c.firstMealT);
+        this.add('watchFirstMeal', 2, { name, id: c.id });
+      }
+      if (c.firstReproT >= 0 && !has('parent')) {
+        this.story(s, 'parent', { mate: this.mateOf(c) }, c.firstReproT);
+        this.add('watchParent', 2, { name, id: c.id });
+      }
+      if (c.children > s.children) {
+        for (const m of CHILD_MARKS) {
+          if (s.children < m && c.children >= m) {
+            this.story(s, 'children', { n: m });
+            if (m >= 5) this.add('watchChildren', 2, { name, id: c.id, n: m });
+          }
+        }
+        s.children = c.children;
+      }
+      if (c.stage === 'elder' && !has('elder')) {
+        this.story(s, 'elder');
+        this.add('watchElder', 1, { name, id: c.id });
+      }
+    }
+  }
+
+  /** The partner of a creature's first brood, by name. */
+  private mateOf(c: Creature): string {
+    for (const kid of c.kids) {
+      const k = this.world.creatureMap.get(kid);
+      const n = this.lineage.nodes.get(kid);
+      const pa = k ? k.parentA : n ? n.pa : 0;
+      const pb = k ? k.parentB : n ? n.pb : 0;
+      const mate = pa === c.id ? pb : pb === c.id ? pa : 0;
+      if (mate) return nameOf(this.world, mate);
+    }
+    return '伴侣';
+  }
+
+  private onDescendant(tag: number, c: Creature): void {
+    const s = this.stories.get(tag);
+    if (!s || !s.watched) return;
+    s.descendants++;
+    const depth = c.generation - s.generation;
+    if (depth > s.maxDepth) {
+      for (const m of DEPTH_MARKS) {
+        if (s.maxDepth < m && depth >= m && m >= 3) {
+          this.story(s, 'descendants', { n: m });
+          this.add('watchDescendants', 2, { name: s.custom || s.name, id: c.id, n: m });
+        }
+      }
+      s.maxDepth = depth;
+    }
+  }
+
+  private onStoryDeath(c: Creature, cause: keyof typeof DEATH_LABELS, age: number, children: number): void {
+    const s = this.stories.get(c.id);
+    if (!s || s.diedT >= 0) return;
+    s.diedT = this.world.time;
+    s.diedW = this.world.clock();
+    s.cause = DEATH_LABELS[cause];
+    s.age = age;
+    s.children = children;
+    s.genome = cloneGenome(c.genome);
+    const how = DEATH_PHRASES[cause];
+    this.story(s, 'death', { cause: s.cause, how, age: formatAge(age), children });
+    if (s.watched) this.add('watchDeath', 2, { name: s.custom || s.name, cause: s.cause, how, age: formatAge(age), children });
+  }
+
+  /** Keep a remarkable life in the archive even if nobody was watching. */
+  private keepRecord(c: Creature, reason: keyof typeof RECORD_LABELS): void {
+    let s = this.stories.get(c.id);
+    if (!s) {
+      s = newStory(this.world, c, reason);
+      this.backfill(s, c);
+      this.stories.set(c.id, s);
+      this.lineage.pinned.add(c.id);
+      const autos = [...this.stories.values()].filter((x) => x.auto && !x.watched);
+      if (autos.length > MAX_AUTO) {
+        const victim = autos.sort((a, b) => a.watchedT - b.watchedT)[0];
+        this.stories.delete(victim.id);
+        this.lineage.pinned.delete(victim.id);
+      }
+    } else if (!s.auto) s.auto = reason;
+    this.story(s, 'record', { text: `被记入档案：${RECORD_LABELS[reason]}。` });
+    if (c.dying > 0 && s.diedT < 0) this.onStoryDeath(c, c.deathCause ?? 'age', c.age, c.children);
+  }
+
+  /** A disaster began (so lives can later remember living through it). */
+  noteDisaster(id: number, label: string, mood: number): void {
+    this.disasterKinds[String(id)] = [label, mood];
+    const keys = Object.keys(this.disasterKinds);
+    if (keys.length > 200) delete this.disasterKinds[keys[0]];
+  }
+
+  /** A disaster ended: the watched who lived through it remember. */
+  disasterSurvived(id: number): void {
+    const d = this.disasterKinds[String(id)];
+    if (!d) return;
+    for (const s of this.stories.values()) {
+      if (!s.watched || s.diedT >= 0) continue;
+      const c = this.world.creatureMap.get(s.id);
+      if (!c || c.dying > 0 || !c.disasters.includes(id)) continue;
+      this.story(s, 'disaster', { kind: d[0], mood: d[1] });
+      if (d[1] === 0) this.add('watchDisaster', 2, { name: c.customName || c.name, id: c.id, kind: d[0] });
+    }
+  }
+
+  /** The place a creature lives now, in words (for the card). */
+  placeNow(c: Creature): string {
+    return placeOf(this.world, c.x, c.y);
   }
 
   /** Rare traits: how many are alive, spreading, vanished, lost from the gene pool. */
@@ -521,6 +805,10 @@ export class History {
       acc: { ...this.acc },
       timers: { ...this.timers },
       throttle: { ...this.throttle },
+      lineage: this.lineage.save(),
+      stories: [...this.stories.values()].map((s) => structuredClone(s)),
+      maxChildren: this.maxChildren,
+      disasterKinds: { ...this.disasterKinds },
     };
   }
 
@@ -540,14 +828,19 @@ export class History {
     this.drift = new Map(Object.entries(d.drift ?? {}).map(([k, v]) => [Number(k), v]));
     this.codex = new Map((d.codex ?? []).map((e) => [e.key, e]));
     this.acc = d.acc ?? { births: 0, deaths: 0, ageSum: 0, ageN: 0 };
-    this.timers = d.timers ?? { detect: 0, sample: 0, drift: 0 };
+    this.timers = { detect: 0, sample: 0, drift: 0, prune: 0, ...(d.timers ?? {}) };
     this.throttle = d.throttle ?? {};
+    this.lineage.load(d.lineage);
+    this.stories = new Map((d.stories ?? []).map((s) => [s.id, s]));
+    this.maxChildren = d.maxChildren ?? 0;
+    this.disasterKinds = d.disasterKinds ?? {};
   }
 }
 
 function nameOf(w: World, id: number): string {
   const c = w.creatureMap.get(id);
-  return c ? c.customName || c.name : '无名者';
+  if (c) return c.customName || c.name;
+  return w.history.lineage.nodes.get(id)?.name ?? '无名者';
 }
 
 function pct(now: number, base: number): number {

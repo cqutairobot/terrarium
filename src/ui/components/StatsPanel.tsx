@@ -1,7 +1,12 @@
 import { useMemo, useState } from 'react';
 import type { Engine } from '../../engine/engine';
 import { hsl } from '../../render/color';
+import { express, N_GENES, type Genome } from '../../sim/genome';
 import type { Sample } from '../../sim/history/series';
+import { emptyAlleles } from '../../sim/rareTraits';
+import { familyDepth, type SpeciesRecord } from '../../sim/registry';
+import type { World } from '../../sim/world';
+import { Portrait } from './Portrait';
 import { formatAge, formatDuration, pct, tempLabel, worldClock } from '../format';
 import { TrendChart, type ChartLine } from './TrendChart';
 
@@ -23,6 +28,7 @@ export function StatsPanel({ engine }: { engine: Engine }) {
   const [win, setWin] = useState<Win>(3600);
   const [axis, setAxis] = useState<'sim' | 'real'>('sim');
   const [chartOpen, setChartOpen] = useState(true);
+  const [pick, setPick] = useState(0);
   const k = world.counts();
   const latest = h.series.latest();
   const samples = h.series.window(win, axis, world.time, world.clock());
@@ -63,6 +69,7 @@ export function StatsPanel({ engine }: { engine: Engine }) {
     .sort((a, b) => b.population - a.population);
   const life = h.meanLifespan(1800);
   const record = h.longevityRecord();
+  const focus = species.find((s) => s.id === pick) ?? species[0];
   const markers = h.chronicle
     .filter((e) => e.k === 'disasterStart' || e.k === 'speciation' || e.k === 'speciesExtinct' || e.k === 'rareFirst')
     .map((e) => ({ t: e.t, w: e.w, color: e.k === 'disasterStart' ? '#ffc48c' : e.k === 'rareFirst' ? '#ffe08a' : '#b8a6ff', label: e.k }));
@@ -94,7 +101,7 @@ export function StatsPanel({ engine }: { engine: Engine }) {
       <div className="section-title">族群</div>
       <div className="species-list">
         {species.map((s) => (
-          <div key={s.id} className="species-row">
+          <div key={s.id} className={`species-row clickable ${focus?.id === s.id ? 'on' : ''}`} onClick={() => setPick(s.id)} title="查看它的演化">
             <i className="dot" style={{ background: hsl(s.hue, 0.55, 0.65) }} />
             <span>{s.name}</span>
             <span className="muted small">{s.trophic === 'carnivore' ? '掠食' : s.trophic === 'omnivore' ? '杂食' : '草食'}</span>
@@ -119,11 +126,91 @@ export function StatsPanel({ engine }: { engine: Engine }) {
           <TrendChart samples={samples} lines={lines} axis={axis} scale={metric === 'traits' ? 'shared' : 'own'} markers={markers} />
         </>
       )}
-      {record.age > 0 && (
-        <div className="muted small record">
-          有史以来最长寿：{record.name}（{formatAge(record.age)}）
-        </div>
-      )}
+      {focus && <ThenNow world={world} sp={focus} />}
+
+      <div className="section-title">进化之最</div>
+      <Bests world={world} record={record} />
+    </div>
+  );
+}
+
+const DRIFT_TRAITS: [string, (p: ReturnType<typeof express>) => number][] = [
+  ['体型', (p) => p.radius],
+  ['速度', (p) => p.maxSpeed],
+  ['感知', (p) => p.senseRadius],
+  ['代谢', (p) => p.metabolismMult],
+  ['寿命', (p) => p.lifespan],
+  ['攻击', (p) => p.attack],
+  ['防御', (p) => p.defense + 0.05],
+  ['繁殖冷却', (p) => p.reproCooldown],
+];
+
+/** The founding ancestors of a species beside its average member today. */
+function ThenNow({ world, sp }: { world: World; sp: SpeciesRecord }) {
+  const base = world.history.baselineOf(sp.id);
+  if (!base || base.length !== N_GENES || sp.centroid.length !== N_GENES) return null;
+  const then: Genome = { g: base, rare: emptyAlleles() };
+  const now: Genome = { g: sp.centroid, rare: emptyAlleles() };
+  const a = express(then);
+  const b = express(now);
+  const changes = DRIFT_TRAITS.map(([label, f]) => [label, f(b) / Math.max(1e-6, f(a)) - 1] as const)
+    .filter(([, v]) => Math.abs(v) >= 0.03)
+    .sort((x, y) => Math.abs(y[1]) - Math.abs(x[1]))
+    .slice(0, 5);
+  const age = world.time - sp.foundedAt;
+  return (
+    <>
+      <div className="section-title">
+        演化对照 <span className="muted small">{sp.name}</span>
+      </div>
+      <div className="then-now">
+        <figure>
+          <Portrait genome={then} width={110} height={64} id={sp.id} />
+          <figcaption>{sp.foundedAt <= 1 ? '最初的祖先' : '分化之初'}</figcaption>
+        </figure>
+        <span className="arrow">→</span>
+        <figure>
+          <Portrait genome={now} width={110} height={64} id={sp.id} />
+          <figcaption>如今的平均个体</figcaption>
+        </figure>
+      </div>
+      <div className="drift-list">
+        {changes.map(([label, v]) => (
+          <span key={label} className="chip">
+            {label} {v >= 0 ? '+' : ''}
+            {Math.round(v * 100)}%
+          </span>
+        ))}
+        {changes.length === 0 && <span className="muted small">{age < 1800 ? '时间还短，变化还看不出来。' : '这个族群的样子几乎没有改变。'}</span>}
+      </div>
+    </>
+  );
+}
+
+function Bests({ world, record }: { world: World; record: { age: number; name: string } }) {
+  const families = [...world.families.values()].filter((f) => f.living > 0);
+  const oldest = families.reduce<(typeof families)[number] | null>((best, f) => (!best || familyDepth(f) > familyDepth(best) ? f : best), null);
+  const biggest = families.reduce<(typeof families)[number] | null>((best, f) => (!best || f.totalMembers > best.totalMembers ? f : best), null);
+  const rare = [...world.history.codex.values()].filter((e) => !e.key.includes('+') && e.living > 0).sort((a, b) => b.living - a.living)[0];
+  const species = [...world.species.values()];
+  const longest = species.reduce<SpeciesRecord | null>((best, s) => {
+    const span = (s.extinctAt ?? world.time) - s.foundedAt;
+    return !best || span > (best.extinctAt ?? world.time) - best.foundedAt ? s : best;
+  }, null);
+  return (
+    <div className="bests small">
+      <span>最古老的家族</span>
+      <b>{oldest ? `${oldest.name}家 · 延续 ${familyDepth(oldest)} 代 · 在世 ${oldest.living} 只` : '—'}</b>
+      <span>最繁盛的家族</span>
+      <b>{biggest ? `${biggest.name}家 · 累计 ${biggest.totalMembers} 只` : '—'}</b>
+      <span>最长寿的生命</span>
+      <b>{record.age > 0 ? `${record.name} · ${formatAge(record.age)}` : '—'}</b>
+      <span>最普遍的稀有特征</span>
+      <b>{rare ? `${rare.label} · ${rare.living} 只` : '—'}</b>
+      <span>最古老的族群</span>
+      <b>{longest ? `${longest.name} · ${formatDuration((longest.extinctAt ?? world.time) - longest.foundedAt)}${longest.extinctAt !== null ? '（已消失）' : ''}` : '—'}</b>
+      <span>累计出现的族群</span>
+      <b>{species.length} 个 · 消失了 {species.filter((s) => s.extinctAt !== null).length} 个</b>
     </div>
   );
 }

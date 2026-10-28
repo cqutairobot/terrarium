@@ -7,8 +7,18 @@ export { formatAge, formatDuration };
 
 /** "第 3 个昼夜 · 14:20" — the world's own calendar. */
 export function worldClock(world: World): string {
-  const day = Math.floor(world.time / world.cfg.dayLength) + 1;
-  const minutes = Math.floor((((6 + world.env.dayPhase * 24) % 24) * 60) % 1440);
+  return clockAt(world, world.time);
+}
+
+/**
+ * The world's calendar at any moment of simulated time. The sun's phase
+ * (environment.dayPhase = time / dayLength + 0.06) maps to a 24-hour clock
+ * that starts at 06:00; the first morning is day 1 and days turn at midnight.
+ */
+export function clockAt(world: World, t: number): string {
+  const hours = 6 + (Math.max(0, t) / world.cfg.dayLength + 0.06) * 24;
+  const day = Math.floor(hours / 24) + 1;
+  const minutes = Math.floor((hours % 24) * 60);
   const hh = String(Math.floor(minutes / 60)).padStart(2, '0');
   const mm = String(minutes % 60).padStart(2, '0');
   return `第 ${day} 个昼夜 · ${hh}:${mm}`;
