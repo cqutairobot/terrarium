@@ -27,10 +27,13 @@ export function CreatureCard({ engine, c, openStory }: { engine: Engine; c: Crea
   const [tab, setTab] = useState<Tab>('now');
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState('');
+  const [moving, setMoving] = useState(false);
   const open = useRef(false);
+  const otherTanks = engine.profile.tanks.filter((t) => t.id !== engine.tankId);
   useEffect(() => {
     open.current = false;
     setEditing(false);
+    setMoving(false);
   }, [c.id]);
 
   const close = (save: boolean) => {
@@ -60,13 +63,11 @@ export function CreatureCard({ engine, c, openStory }: { engine: Engine; c: Crea
               onBlur={() => close(true)}
             />
           ) : (
-            <div className="card-name">
-              {c.customName || c.name}
-              {c.customName && <span className="muted small"> （{c.name}）</span>}
-            </div>
+            <div className="card-name">{c.customName || c.name}</div>
           )}
-          <div className="muted small">
-            #{c.id} · {species?.name ?? '未知族群'} · {family ? `${family.name}家` : ''}
+          <div className="muted small card-meta" title={`${c.customName ? `原名${c.name} · ` : ''}#${c.id} · ${species?.name ?? '未知族群'}${family ? ` · ${family.name}家` : ''}`}>
+            {c.customName ? `原名${c.name} · ` : ''}#{c.id} · {species?.name ?? '未知族群'}
+            {family ? ` · ${family.name}家` : ''}
           </div>
         </div>
         <button
@@ -89,6 +90,11 @@ export function CreatureCard({ engine, c, openStory }: { engine: Engine; c: Crea
         >
           <Icon.edit />
         </button>
+        {otherTanks.length > 0 && (
+          <button className={`icon-btn ${moving ? 'on' : ''}`} title="搬到另一个水缸" onClick={() => setMoving(!moving)} disabled={c.dying > 0 || engine.busy}>
+            <Icon.move />
+          </button>
+        )}
         <button className={`icon-btn ${following ? 'on' : ''}`} title={following ? '停止跟随' : '镜头跟随'} onClick={() => engine.follow(following ? 0 : c.id)}>
           <Icon.follow />
         </button>
@@ -96,6 +102,17 @@ export function CreatureCard({ engine, c, openStory }: { engine: Engine; c: Crea
           <Icon.close />
         </button>
       </div>
+
+      {moving && (
+        <div className="move-menu">
+          <span className="muted small">它会带着自己的故事，搬到另一个水缸里继续生活：</span>
+          {otherTanks.map((t) => (
+            <button key={t.id} className="btn small" onClick={() => void engine.moveCreature(c.id, t.id)} disabled={engine.busy}>
+              搬到「{t.name}」<span className="muted"> · {t.population} 只</span>
+            </button>
+          ))}
+        </div>
+      )}
 
       <div className="card-tabs">
         <Seg

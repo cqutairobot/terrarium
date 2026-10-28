@@ -1,29 +1,42 @@
 import { useEffect, useRef, useState } from 'react';
 import type { Engine } from '../../engine/engine';
+import { tankLimit } from '../../game/profile';
 import type { SaveMeta } from '../../persist/storage';
 import { formatDuration, wallTime } from '../format';
 import { Seg } from './StatsPanel';
 
 const QUALITY_NAMES = ['低', '中', '高'] as const;
 
-/** Save, load, export, import, reset and create worlds. */
+/** The tanks, snapshots, files and settings. */
 export function WorldPanel({ engine }: { engine: Engine }) {
   const world = engine.world;
   const [saves, setSaves] = useState<SaveMeta[]>([]);
   const [seed, setSeed] = useState('');
   const [name, setName] = useState('');
-  const [confirm, setConfirm] = useState<'reset' | 'new' | null>(null);
+  const [confirm, setConfirm] = useState<{ kind: 'reset' } | { kind: 'load' | 'delete'; id: string; label: string } | null>(null);
+  const [renaming, setRenaming] = useState<{ id: string; text: string } | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  const tanks = engine.profile.tanks;
+  const tankName = (id?: string) => tanks.find((t) => t.id === id)?.name ?? '已移走的水缸';
 
   const refresh = () => {
     engine.listSaves().then(setSaves, () => setSaves([]));
   };
   useEffect(refresh, [engine, engine.lastSavedAt, world]);
 
+  const doConfirm = () => {
+    if (!confirm) return;
+    if (confirm.kind === 'reset') engine.resetWorld();
+    else if (confirm.kind === 'load') void engine.load(confirm.id);
+    else void engine.deleteTank(confirm.id);
+    setConfirm(null);
+  };
+
   return (
     <div className="panel-body">
       <div className="world-line">
         <span className="world-name">{world.name}</span>
+        <span className="muted small">正在看的水缸</span>
       </div>
       <div className="kv">
         <span>种子</span>
@@ -32,12 +45,8 @@ export function WorldPanel({ engine }: { engine: Engine }) {
         <b>{wallTime(world.createdAt)}</b>
         <span>模拟时长</span>
         <b>{formatDuration(world.time)}</b>
-        <span>世界尺寸</span>
-        <b>
-          {world.width} × {world.height}
-        </b>
         <span>存储</span>
-        <b>{engine.storage.kind === 'indexeddb' ? '本机 IndexedDB · 每分钟自动保存' : '仅内存（浏览器禁止存储，请导出备份）'}</b>
+        <b>{engine.storage.kind === 'indexeddb' ? '本机 IndexedDB · 自动保存' : '仅内存（浏览器禁止存储，请导出备份）'}</b>
         {engine.lastSavedAt > 0 && (
           <>
             <span>上次保存</span>
@@ -45,15 +54,95 @@ export function WorldPanel({ engine }: { engine: Engine }) {
           </>
         )}
       </div>
+
+      <div className="section-title">
+        我的水缸 <span className="muted small">{tanks.length} / {tankLimit(engine.profile)}</span>
+      </div>
+      <div className="save-list">
+        {tanks.map((t) => {
+          const active = t.id === engine.tankId;
+          return (
+            <div key={t.id} className={`save-row ${active ? 'current' : ''}`}>
+              <div>
+                {renaming?.id === t.id ? (
+                  <input
+                    className="field"
+                    autoFocus
+                    maxLength={16}
+                    value={renaming.text}
+                    onChange={(e) => setRenaming({ id: t.id, text: e.target.value })}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        void engine.renameTank(t.id, renaming.text);
+                        setRenaming(null);
+                      } else if (e.key === 'Escape') setRenaming(null);
+                    }}
+                    onBlur={() => setRenaming(null)}
+                  />
+                ) : (
+                  <div>
+                    {active ? world.name : t.name}
+                    {active && <span className="muted small"> · 正在看</span>}
+                  </div>
+                )}
+                <div className="muted small">
+                  {active ? world.consumerCount + world.predatorCount : t.population} 只 · 第 {active ? world.counters.generationsMax : t.generation} 代 ·{' '}
+                  {active ? '此刻' : `上次见到 ${wallTime(t.lastWall)}`}
+                </div>
+              </div>
+              <div className="save-actions">
+                {!active && (
+                  <button className="btn small" onClick={() => void engine.switchTank(t.id)} disabled={engine.busy}>
+                    去看看
+                  </button>
+                )}
+                <button className="btn small ghost" onClick={() => setRenaming({ id: t.id, text: active ? world.name : t.name })}>
+                  改名
+                </button>
+                {!active && (
+                  <button className="btn small ghost" onClick={() => setConfirm({ kind: 'delete', id: t.id, label: t.name })}>
+                    放下
+                  </button>
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      {engine.canAddTank() ? (
+        <>
+          <div className="field-row">
+            <input className="field" placeholder="种子（留空则随机）" value={seed} onChange={(e) => setSeed(e.target.value)} />
+            <input className="field" placeholder="名字（可选）" value={name} onChange={(e) => setName(e.target.value)} />
+          </div>
+          <div className="btn-row">
+            <button
+              className="btn"
+              onClick={() => {
+                void engine.createTank(seed, name);
+                setSeed('');
+                setName('');
+              }}
+              disabled={engine.busy}
+            >
+              养一个新水缸
+            </button>
+          </div>
+        </>
+      ) : (
+        <div className="muted small">水缸已经满了。放下一个旧水缸，才能再养一个新的。</div>
+      )}
+
+      <div className="section-title">快照与文件</div>
       <div className="btn-row">
         <button className="btn" onClick={() => void engine.save('manual').then(refresh)}>
-          保存当前世界
+          给这个水缸拍个快照
         </button>
         <button className="btn" onClick={() => engine.exportWorld()}>
           导出文件
         </button>
-        <button className="btn" onClick={() => fileRef.current?.click()}>
-          导入文件
+        <button className="btn" onClick={() => fileRef.current?.click()} disabled={!engine.canAddTank()}>
+          导入为新水缸
         </button>
         <input
           ref={fileRef}
@@ -67,62 +156,44 @@ export function WorldPanel({ engine }: { engine: Engine }) {
           }}
         />
       </div>
-
-      <div className="section-title">存档</div>
       <div className="save-list">
         {saves.map((s) => (
           <div key={s.id} className="save-row">
             <div>
-              <div>{s.kind === 'auto' ? `自动存档 · ${s.worldName}` : s.name}</div>
+              <div>{s.name}</div>
               <div className="muted small">
-                {wallTime(s.savedAt)} · 模拟 {formatDuration(s.simTime)} · {s.population} 只 · 第 {s.generation} 代
+                {tankName(s.tankId)} · {wallTime(s.savedAt)} · 模拟 {formatDuration(s.simTime)} · {s.population} 只 · 第 {s.generation} 代
               </div>
             </div>
             <div className="save-actions">
-              <button className="btn small" onClick={() => void engine.load(s.id)}>
-                读取
+              <button className="btn small" onClick={() => setConfirm({ kind: 'load', id: s.id, label: s.name })}>
+                回到这里
               </button>
-              {s.kind === 'manual' && (
-                <button className="btn small ghost" onClick={() => void engine.remove(s.id).then(refresh)}>
-                  删除
-                </button>
-              )}
+              <button className="btn small ghost" onClick={() => void engine.remove(s.id).then(refresh)}>
+                删除
+              </button>
             </div>
           </div>
         ))}
-        {saves.length === 0 && <div className="muted small">还没有存档。</div>}
+        {saves.length === 0 && <div className="muted small">还没有快照。快照可以让水缸回到某一刻。</div>}
+      </div>
+      <div className="btn-row">
+        <button className="btn ghost" onClick={() => setConfirm({ kind: 'reset' })}>
+          让这个水缸从头开始
+        </button>
       </div>
 
-      <div className="section-title">新的开始</div>
-      <div className="field-row">
-        <input className="field" placeholder="种子（留空则随机）" value={seed} onChange={(e) => setSeed(e.target.value)} />
-        <input className="field" placeholder="名字（可选）" value={name} onChange={(e) => setName(e.target.value)} />
-      </div>
-      {confirm === null ? (
-        <div className="btn-row">
-          <button className="btn" onClick={() => setConfirm('new')}>
-            创建新世界
-          </button>
-          <button className="btn ghost" onClick={() => setConfirm('reset')}>
-            重置当前世界
-          </button>
-        </div>
-      ) : (
+      {confirm && (
         <div className="confirm">
           <div className="small">
-            {confirm === 'new' ? '当前世界会被自动保存的新世界替换（手动存档不受影响）。确定吗？' : '当前世界将回到第一天，所有历史会重新开始。确定吗？'}
+            {confirm.kind === 'reset'
+              ? '这个水缸会回到第一天，里面的生命和历史都会重新开始。确定吗？'
+              : confirm.kind === 'load'
+                ? `这个水缸会回到快照「${confirm.label}」的那一刻，之后发生的事会消失。确定吗？`
+                : `放下水缸「${confirm.label}」？里面的生命会一起离开，无法找回（快照不受影响）。`}
           </div>
           <div className="btn-row">
-            <button
-              className="btn warn"
-              onClick={() => {
-                if (confirm === 'new') engine.newWorld(seed, name);
-                else engine.resetWorld();
-                setConfirm(null);
-                setSeed('');
-                setName('');
-              }}
-            >
+            <button className="btn warn" onClick={doConfirm}>
               确定
             </button>
             <button className="btn ghost" onClick={() => setConfirm(null)}>
@@ -173,6 +244,10 @@ function Settings({ engine }: { engine: Engine }) {
           <input type="range" min={0} max={1} step={0.01} value={p.volume} onChange={(e) => engine.setPref('volume', Number(e.target.value))} />
         </div>
       )}
+      <label className="toggle-line">
+        <input type="checkbox" checked={p.offlineProgress} onChange={(e) => engine.setPref('offlineProgress', e.target.checked)} />
+        离开时水缸继续演化（回来时补上，最多 2 个模拟小时）
+      </label>
       <label className="toggle-line">
         <input type="checkbox" checked={p.captions} onChange={(e) => engine.setPref('captions', e.target.checked)} />
         在画面上轻轻显示重要事件

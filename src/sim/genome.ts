@@ -266,6 +266,14 @@ export function trophicOf(diet: number): Trophic {
  * Decode a genome into the numbers the simulation actually uses.
  * Units: world units (u), seconds (s), energy (e).
  */
+/** Lifespans relative to the first version (a livelier turnover for play). */
+export const LIFESPAN_SCALE = 0.8;
+/** Share of a lifetime spent growing up (first version: 0.22). */
+export const MATURITY_FRACTION = 0.15;
+/** Rest between broods, in seconds, before size and metabolism (first version: 45 + 70). */
+const COOLDOWN_BASE = 35;
+const COOLDOWN_K = 55;
+
 export function express(genome: Genome): Phenotype {
   const g = genome.g;
   const v = (k: GeneKey) => g[G[k]];
@@ -313,13 +321,14 @@ export function express(genome: Genome): Phenotype {
   const moveCoeff = Math.pow(mass, 0.75) * drag;
   const senseCost = 0.00025 * senseRadius;
 
-  const lifespan = ((360 + 780 * v('longevity')) * Math.pow(rel, 0.55)) / Math.sqrt(M);
-  const maturityAge = lifespan * 0.22 * (1.15 - 0.3 * metab);
+  const lifespan = (LIFESPAN_SCALE * (360 + 780 * v('longevity')) * Math.pow(rel, 0.55)) / Math.sqrt(M);
+  // game pacing: the young come of age quickly, so a bred line shows its next generation within minutes
+  const maturityAge = lifespan * MATURITY_FRACTION * (1.15 - 0.3 * metab);
 
   const fert = v('fertility');
   const reproThreshold = 0.5 + 0.2 * (1 - fert);
   const investFraction = 0.35 + 0.4 * (1 - fert);
-  const reproCooldown = ((45 + 70 * (1 - fert)) * Math.sqrt(rel)) / M;
+  const reproCooldown = ((COOLDOWN_BASE + COOLDOWN_K * (1 - fert)) * Math.sqrt(rel)) / M;
   const twinChance = 0.25 * fert * fert;
 
   const aggression = v('aggression');

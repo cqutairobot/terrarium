@@ -147,6 +147,13 @@ function immigratePredators(world: World): void {
 function ensureFreshSpecies(world: World, genome: Genome, key: string, batch: Map<string, number>): number {
   const existing = batch.get(key);
   if (existing !== undefined) return existing;
+  const id = foundSpecies(world, genome);
+  batch.set(key, id);
+  return id;
+}
+
+/** Register a new species founded by `genome` and return its id. */
+export function foundSpecies(world: World, genome: Genome): number {
   const id = world.newId();
   const g = genome.g;
   const taken = new Set([...world.species.values()].map((s) => s.name));
@@ -178,7 +185,6 @@ function ensureFreshSpecies(world: World, genome: Genome, key: string, batch: Ma
     extinctAt: null,
     milestones: [],
   });
-  batch.set(key, id);
   return id;
 }
 

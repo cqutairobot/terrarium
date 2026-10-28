@@ -3,7 +3,10 @@ import type { WorldSnapshot } from '../sim/serialize';
 export interface SaveMeta {
   id: string;
   name: string;
-  kind: 'auto' | 'manual';
+  /** 'tank' is a living tank; 'manual' a snapshot kept by the player; 'auto' the first version's autosave. */
+  kind: 'auto' | 'manual' | 'tank';
+  /** The tank a manual snapshot was taken from. */
+  tankId?: string;
   savedAt: number;
   worldName: string;
   seed: string;
@@ -26,12 +29,16 @@ export interface StorageAdapter {
   get(id: string): Promise<SaveRecord | undefined>;
   list(): Promise<SaveMeta[]>;
   remove(id: string): Promise<void>;
+  /** Small JSON documents (the player profile). */
+  getDoc<T>(key: string): Promise<T | undefined>;
+  putDoc<T>(key: string, value: T): Promise<void>;
 }
 
 /** Fallback when IndexedDB is unavailable (private windows, blocked storage). */
 export class MemoryStorage implements StorageAdapter {
   readonly kind = 'memory' as const;
   private map = new Map<string, SaveRecord>();
+  private docs = new Map<string, string>();
 
   async put(rec: SaveRecord): Promise<void> {
     this.map.set(rec.id, rec);
@@ -47,6 +54,16 @@ export class MemoryStorage implements StorageAdapter {
 
   async remove(id: string): Promise<void> {
     this.map.delete(id);
+  }
+
+  async getDoc<T>(key: string): Promise<T | undefined> {
+    const s = this.docs.get(key);
+    return s === undefined ? undefined : (JSON.parse(s) as T);
+  }
+
+  async putDoc<T>(key: string, value: T): Promise<void> {
+    // stored as text so callers never share mutable state with the store
+    this.docs.set(key, JSON.stringify(value));
   }
 }
 

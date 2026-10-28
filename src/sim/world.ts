@@ -61,6 +61,8 @@ export interface Ledger {
   inflow: number;
   /** Matter added by the observer as food. */
   feed: number;
+  /** Matter carried in (positive) or out (negative) by creatures moving between tanks. */
+  moved: number;
 }
 
 export interface WorldCounters {
@@ -115,7 +117,7 @@ export class World {
   species = new Map<number, SpeciesRecord>();
   families = new Map<number, FamilyRecord>();
 
-  ledger: Ledger = { heat: 0, inflow: 0, feed: 0 };
+  ledger: Ledger = { heat: 0, inflow: 0, feed: 0, moved: 0 };
   counters: WorldCounters = { births: 0, deaths: 0, generationsMax: 0 };
   ecology: EcologyState = emptyEcology();
   /** Facts produced during the current step (consumed by the history layer). */

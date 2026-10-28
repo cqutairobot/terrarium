@@ -1,4 +1,7 @@
 import { Ambient } from '../audio/ambient';
+import { awayFacts, summarizeAway, type AwaySummary } from '../game/away';
+import { PROFILE_KEY, tankLimit, type Profile, type TankInfo } from '../game/profile';
+import { addTank, syncTankInfo, tankRecord } from '../game/tanks';
 import type { StorageAdapter, SaveMeta } from '../persist/storage';
 import { downloadSnapshot, readSnapshotFile } from '../persist/exportImport';
 import { Renderer } from '../render/renderer';
@@ -6,8 +9,10 @@ import type { EcoConfig, EnvSettings } from '../sim/config';
 import type { Creature } from '../sim/entities/creature';
 import type { FoodKind } from '../sim/entities/food';
 import type { DisasterKind } from '../sim/environment';
+import { emigrate, immigrate } from '../sim/migration';
 import { restoreWorld, snapshotWorld } from '../sim/serialize';
 import { SIM_DT, World } from '../sim/world';
+import { CatchUpRunner } from './catchUp';
 import { Input } from './input';
 import { Loop } from './loop';
 import { loadPrefs, savePrefs, type Prefs } from './prefs';
@@ -29,8 +34,21 @@ export interface LostFollow {
   at: number;
 }
 
-export const AUTOSAVE_ID = 'autosave';
+/** A tank catching up on time nobody watched. */
+export interface CatchUpState {
+  tankName: string;
+  /** Simulated seconds to make up. */
+  target: number;
+  done: number;
+  awayMs: number;
+  stopping: boolean;
+}
+
 const AUTOSAVE_EVERY = 60;
+/** Shorter absences are simply resumed. */
+const MIN_AWAY_MS = 60_000;
+/** At most two simulated hours are made up at once. */
+export const MAX_CATCH_UP = 7200;
 /** In power-saving (wallpaper) mode the world is written less often. */
 const AUTOSAVE_EVERY_QUIET = 180;
 
@@ -54,6 +72,13 @@ export class Engine {
   toasts: Toast[] = [];
   lastSavedAt = 0;
   lostFollow: LostFollow | null = null;
+  profile: Profile;
+  /** The tank being shown. */
+  tankId: string;
+  catchUp: CatchUpState | null = null;
+  away: AwaySummary | null = null;
+  /** A tank operation (switch, move, create) is under way. */
+  busy = false;
   prefs: Prefs;
   readonly audio = new Ambient();
   private qualityAcc = 0;
@@ -66,14 +91,18 @@ export class Engine {
   private toastId = 1;
   private input: Input;
   private saving = false;
+  private runner = new CatchUpRunner();
+  private hiddenAt = 0;
 
   constructor(
     readonly canvas: HTMLCanvasElement,
     world: World,
     readonly storage: StorageAdapter,
-    opts: { wallpaper?: boolean } = {},
+    opts: { wallpaper?: boolean; profile: Profile; tankId: string },
   ) {
     this.world = world;
+    this.profile = opts.profile;
+    this.tankId = opts.tankId;
     this.prefs = loadPrefs(opts.wallpaper ?? false);
     this.uiHidden = opts.wallpaper ?? false;
     this.renderer = new Renderer(canvas, world);
@@ -84,13 +113,18 @@ export class Engine {
         this.autosaveAcc += realDt;
         if (this.autosaveAcc >= (this.prefs.powerSave ? AUTOSAVE_EVERY_QUIET : AUTOSAVE_EVERY)) {
           this.autosaveAcc = 0;
-          this.idle(() => void this.save('auto'));
+          this.idle(() => void this.saveActive());
         }
         this.qualityAcc += realDt;
         if (this.qualityAcc >= 2) {
           this.qualityAcc = 0;
           this.adaptQuality();
         }
+      },
+      gap: (seconds) => {
+        // the machine slept with the page open: make up for it like any absence
+        this.loop.stop();
+        void this.catchUpAfter(seconds * 1000);
       },
       render: (alpha, dt, vt) => {
         for (const e of this.world.drainFx()) {
@@ -140,18 +174,21 @@ export class Engine {
 
   private onVisibility = (): void => {
     if (document.hidden) {
-      // the world rests while nobody can see it; keep it safe first
-      void this.save('auto');
+      // keep the world safe, then let it rest until someone looks again
+      this.hiddenAt = Date.now();
+      void this.saveActive();
       this.loop.stop();
       this.audio.pause();
     } else {
-      this.loop.start();
       this.audio.resume();
+      const away = this.hiddenAt ? Date.now() - this.hiddenAt : 0;
+      this.hiddenAt = 0;
+      void this.catchUpAfter(away);
     }
   };
 
   private onPageHide = (): void => {
-    void this.save('auto');
+    void this.saveActive();
   };
 
   // ------------------------------------------------------------ store
@@ -385,51 +422,75 @@ export class Engine {
     }
   }
 
-  // ------------------------------------------------------------ worlds
+  // ------------------------------------------------------------ tanks
 
-  async save(kind: 'auto' | 'manual', name?: string): Promise<boolean> {
-    if (this.saving) return false;
+  /** The tank being shown. */
+  tank(): TankInfo {
+    return this.profile.tanks.find((t) => t.id === this.tankId) ?? this.profile.tanks[0];
+  }
+
+  private async saveProfile(): Promise<void> {
+    this.profile.lastSeen = Date.now();
+    await this.storage.putDoc(PROFILE_KEY, this.profile);
+  }
+
+  /** Write the shown tank (and the profile) to storage. */
+  async saveActive(): Promise<boolean> {
+    if (this.saving || this.catchUp) return false;
     this.saving = true;
     try {
-      const w = this.world;
-      const snapshot = snapshotWorld(w);
-      const id = kind === 'auto' ? AUTOSAVE_ID : `save-${Date.now()}`;
-      await this.storage.put({
-        id,
-        name: name ?? (kind === 'auto' ? '自动存档' : `${w.name} · ${new Date().toLocaleString('zh-CN', { hour12: false })}`),
-        kind,
-        savedAt: Date.now(),
-        worldName: w.name,
-        seed: w.seed,
-        simTime: w.time,
-        population: w.consumerCount + w.predatorCount,
-        generation: w.counters.generationsMax,
-        snapshot,
-      });
-      this.lastSavedAt = Date.now();
-      if (kind === 'manual') this.toast('已保存：' + w.name);
+      const now = Date.now();
+      await this.storage.put(tankRecord(this.world, this.tankId, now));
+      const info = this.profile.tanks.find((t) => t.id === this.tankId);
+      if (info) syncTankInfo(info, this.world, now);
+      await this.saveProfile();
+      this.lastSavedAt = now;
       return true;
-    } catch (err) {
-      if (kind === 'manual') this.toast('保存失败：' + String((err as Error)?.message ?? err));
+    } catch {
       return false;
     } finally {
       this.saving = false;
     }
   }
 
-  listSaves(): Promise<SaveMeta[]> {
-    return this.storage.list();
+  /** 'auto' keeps the tank itself up to date; 'manual' also keeps a snapshot to return to. */
+  async save(kind: 'auto' | 'manual', name?: string): Promise<boolean> {
+    const ok = await this.saveActive();
+    if (kind === 'auto') return ok;
+    try {
+      const w = this.world;
+      const now = Date.now();
+      const rec = tankRecord(w, `snap-${now}`, now);
+      await this.storage.put({
+        ...rec,
+        kind: 'manual',
+        tankId: this.tankId,
+        name: name ?? `${w.name} · ${new Date(now).toLocaleString('zh-CN', { hour12: false })}`,
+      });
+      this.toast('已保存快照：' + w.name);
+      this.publish();
+      return true;
+    } catch (err) {
+      this.toast('保存失败：' + String((err as Error)?.message ?? err));
+      return false;
+    }
   }
 
+  listSaves(): Promise<SaveMeta[]> {
+    return this.storage.list().then((all) => all.filter((m) => m.kind === 'manual'));
+  }
+
+  /** Bring a snapshot back into the shown tank. */
   async load(id: string): Promise<void> {
     const rec = await this.storage.get(id);
     if (!rec) {
-      this.toast('找不到这个存档');
+      this.toast('找不到这个快照');
       return;
     }
     try {
       this.setWorld(restoreWorld(rec.snapshot));
-      this.toast('已读取：' + rec.worldName);
+      this.toast('已回到快照：' + rec.worldName);
+      await this.saveActive();
     } catch (err) {
       this.toast('读取失败：' + String((err as Error)?.message ?? err));
     }
@@ -440,19 +501,140 @@ export class Engine {
     this.publish();
   }
 
-  newWorld(seed?: string, name?: string): void {
-    const aspect = window.innerWidth / Math.max(1, window.innerHeight);
-    const w = new World({ seed: seed?.trim() || randomSeed(), aspect, name: name?.trim() || undefined });
-    this.setWorld(w);
-    this.toast('新的世界醒来了：' + w.name);
-    void this.save('auto');
+  canAddTank(): boolean {
+    return this.profile.tanks.length < tankLimit(this.profile);
   }
 
+  /** A new tank with a fresh world, shown right away. */
+  async createTank(seed?: string, name?: string, from?: World): Promise<void> {
+    if (this.busy) return;
+    if (!this.canAddTank()) {
+      this.toast(`最多只能养 ${tankLimit(this.profile)} 个水缸`);
+      return;
+    }
+    this.busy = true;
+    try {
+      await this.saveActive();
+      const aspect = window.innerWidth / Math.max(1, window.innerHeight);
+      const w = from ?? new World({ seed: seed?.trim() || randomSeed(), aspect, name: name?.trim() || undefined });
+      const now = Date.now();
+      const id = addTank(this.profile, w, now);
+      await this.storage.put(tankRecord(w, id, now));
+      this.tankId = id;
+      this.setWorld(w);
+      await this.saveProfile();
+      this.toast('新的水缸醒来了：' + w.name);
+    } catch (err) {
+      this.toast('创建失败：' + String((err as Error)?.message ?? err));
+    } finally {
+      this.busy = false;
+      this.publish();
+    }
+  }
+
+  /** Show another tank; it makes up for the time it was not watched. */
+  async switchTank(id: string): Promise<void> {
+    if (this.busy || this.catchUp || id === this.tankId) return;
+    const info = this.profile.tanks.find((t) => t.id === id);
+    if (!info) return;
+    this.busy = true;
+    try {
+      await this.saveActive();
+      const rec = await this.storage.get(id);
+      if (!rec) {
+        this.toast('找不到这个水缸');
+        return;
+      }
+      const w = restoreWorld(rec.snapshot);
+      this.tankId = id;
+      this.profile.activeTank = id;
+      this.setWorld(w);
+      await this.saveProfile();
+      this.busy = false;
+      await this.catchUpAfter(Date.now() - info.lastWall);
+    } catch (err) {
+      this.toast('切换失败：' + String((err as Error)?.message ?? err));
+    } finally {
+      this.busy = false;
+      this.publish();
+    }
+  }
+
+  async renameTank(id: string, name: string): Promise<void> {
+    const clean = name.trim().slice(0, 16);
+    const info = this.profile.tanks.find((t) => t.id === id);
+    if (!clean || !info) return;
+    if (id === this.tankId) {
+      this.world.name = clean;
+      await this.saveActive();
+    } else {
+      const rec = await this.storage.get(id);
+      if (!rec) return;
+      rec.snapshot.name = clean;
+      await this.storage.put({ ...rec, name: clean, worldName: clean });
+      info.name = clean;
+      await this.saveProfile();
+    }
+    this.publish();
+  }
+
+  /** Let a tank go (never the one being shown, never the last one). */
+  async deleteTank(id: string): Promise<void> {
+    if (id === this.tankId || this.profile.tanks.length <= 1) return;
+    await this.storage.remove(id);
+    this.profile.tanks = this.profile.tanks.filter((t) => t.id !== id);
+    await this.saveProfile();
+    this.publish();
+  }
+
+  /** Carry a creature to another tank (it continues its life there). */
+  async moveCreature(cid: number, toId: string): Promise<void> {
+    if (this.busy || this.catchUp || toId === this.tankId) return;
+    const info = this.profile.tanks.find((t) => t.id === toId);
+    const c = this.world.creatureMap.get(cid);
+    if (!info || !c || c.dying > 0) return;
+    this.busy = true;
+    try {
+      const rec = await this.storage.get(toId);
+      if (!rec) {
+        this.toast('找不到那个水缸');
+        return;
+      }
+      const dest = restoreWorld(rec.snapshot);
+      const name = c.customName || c.name;
+      const traveller = emigrate(this.world, cid, dest.name);
+      if (!traveller) return;
+      try {
+        immigrate(dest, structuredClone(traveller));
+        // the destination keeps its own clock of absence: it has not been running meanwhile
+        await this.storage.put(tankRecord(dest, toId, Date.now()));
+        info.population = dest.consumerCount + dest.predatorCount + 1;
+      } catch (err) {
+        immigrate(this.world, traveller);
+        throw err;
+      }
+      if (this.renderer.selectedId === cid) this.select(0);
+      if (this.renderer.followId === cid) this.follow(0);
+      await this.saveActive();
+      this.toast(`「${name}」搬去了「${dest.name}」`);
+    } catch (err) {
+      this.toast('搬家没有成功：' + String((err as Error)?.message ?? err));
+    } finally {
+      this.busy = false;
+      this.publish();
+    }
+  }
+
+  newWorld(seed?: string, name?: string): void {
+    void this.createTank(seed, name);
+  }
+
+  /** The shown tank starts over from its first day. */
   resetWorld(): void {
     const w = new World({ seed: this.world.seed, aspect: this.world.width / this.world.height, name: this.world.name });
     this.setWorld(w);
-    this.toast('世界回到了它的第一天');
-    void this.save('auto');
+    this.toast('水缸回到了它的第一天');
+    void this.saveActive();
   }
 
   exportWorld(): void {
@@ -461,19 +643,70 @@ export class Engine {
     downloadSnapshot(snapshotWorld(w), `浮生-${w.name}-${stamp}.json`);
   }
 
+  /** An exported world arrives as a new tank. */
   async importWorld(file: File): Promise<void> {
     try {
       const snap = await readSnapshotFile(file);
-      this.setWorld(restoreWorld(snap));
-      this.toast('已导入：' + this.world.name);
-      void this.save('auto');
+      await this.createTank(undefined, undefined, restoreWorld(snap));
     } catch (err) {
       this.toast('导入失败：' + String((err as Error)?.message ?? err));
     }
   }
 
+  // ------------------------------------------------------------ catching up
+
+  /**
+   * Make up for time nobody was watching (closed page, hidden tab, another
+   * tank shown): the world runs that long in a worker, capped, skippable.
+   */
+  async catchUpAfter(awayMs: number): Promise<void> {
+    if (!this.prefs.offlineProgress || this.catchUp || awayMs < MIN_AWAY_MS) {
+      this.loop.start();
+      return;
+    }
+    const seconds = Math.min(MAX_CATCH_UP, awayMs / 1000);
+    const before = this.world;
+    const summaryStart = awayFacts(before);
+    const now = Date.now();
+    this.catchUp = { tankName: before.name, target: seconds, done: 0, awayMs, stopping: false };
+    this.loop.stop();
+    this.publish();
+    try {
+      const result = await this.runner.run(snapshotWorld(before), { seconds, wallStart: now - awayMs, wallEnd: now }, (done) => {
+        if (this.catchUp) this.catchUp.done = done;
+        this.publish();
+      });
+      if (this.world !== before) return;
+      const after = restoreWorld(result.snapshot);
+      this.setWorld(after);
+      this.catchUp = null;
+      if (result.simulated >= 60) this.away = summarizeAway(summaryStart, after, awayMs, result.simulated, result.simulated + 1 < seconds);
+      await this.saveActive();
+    } catch (err) {
+      this.toast('补上离开的时间时出了点问题：' + String((err as Error)?.message ?? err));
+    } finally {
+      this.catchUp = null;
+      this.loop.start();
+      this.publish();
+    }
+  }
+
+  /** Stop catching up now and continue from wherever the world got to. */
+  skipCatchUp(): void {
+    if (!this.catchUp || this.catchUp.stopping) return;
+    this.catchUp.stopping = true;
+    this.runner.stop();
+    this.publish();
+  }
+
+  dismissAway(): void {
+    this.away = null;
+    this.publish();
+  }
+
   private setWorld(w: World): void {
     this.world = w;
+    this.away = null;
     this.renderer.setWorld(w);
     this.aiming = null;
     this.lostFollow = null;

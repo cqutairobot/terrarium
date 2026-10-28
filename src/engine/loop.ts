@@ -7,6 +7,8 @@ export interface LoopHooks {
   render(alpha: number, realDt: number, visualTime: number): void;
   /** Called once per frame with the real time elapsed while running. */
   tick?(realDt: number): void;
+  /** Frames stopped for a long while (the machine slept): seconds missed. */
+  gap?(seconds: number): void;
 }
 
 export class Loop {
@@ -54,8 +56,14 @@ export class Loop {
       this.windowStart = now;
       return;
     }
-    // clamp long gaps (tab switches, sleeps) so we never try to catch up
-    const realDt = Math.min(0.25, (now - this.last) / 1000);
+    const missed = (now - this.last) / 1000;
+    if (missed > 30 && this.hooks.gap) {
+      this.last = now;
+      this.hooks.gap(missed);
+      return;
+    }
+    // clamp shorter hiccups so the loop never tries to catch up by itself
+    const realDt = Math.min(0.25, missed);
     this.last = now;
     const t0 = performance.now();
     this.visualTime += realDt;

@@ -1,7 +1,7 @@
 import { MemoryStorage, toMeta, type SaveMeta, type SaveRecord, type StorageAdapter } from './storage';
 
 const DB_NAME = 'tiny-eden';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 
 function req<T>(r: IDBRequest<T>): Promise<T> {
   return new Promise((resolve, reject) => {
@@ -18,7 +18,10 @@ function done(tx: IDBTransaction): Promise<void> {
   });
 }
 
-/** Saves split into a small `meta` store (fast listing) and a `worlds` store (snapshots). */
+/**
+ * Saves split into a small `meta` store (fast listing) and a `worlds` store
+ * (snapshots); `docs` holds small JSON documents such as the player profile.
+ */
 export class IdbStorage implements StorageAdapter {
   readonly kind = 'indexeddb' as const;
   private constructor(private readonly db: IDBDatabase) {}
@@ -29,6 +32,7 @@ export class IdbStorage implements StorageAdapter {
       const db = open.result;
       if (!db.objectStoreNames.contains('meta')) db.createObjectStore('meta', { keyPath: 'id' });
       if (!db.objectStoreNames.contains('worlds')) db.createObjectStore('worlds', { keyPath: 'id' });
+      if (!db.objectStoreNames.contains('docs')) db.createObjectStore('docs', { keyPath: 'key' });
     };
     const db = await req(open);
     return new IdbStorage(db);
@@ -59,6 +63,18 @@ export class IdbStorage implements StorageAdapter {
     const tx = this.db.transaction(['meta', 'worlds'], 'readwrite');
     tx.objectStore('meta').delete(id);
     tx.objectStore('worlds').delete(id);
+    await done(tx);
+  }
+
+  async getDoc<T>(key: string): Promise<T | undefined> {
+    const tx = this.db.transaction('docs', 'readonly');
+    const rec = await req(tx.objectStore('docs').get(key) as IDBRequest<{ key: string; value: T } | undefined>);
+    return rec?.value;
+  }
+
+  async putDoc<T>(key: string, value: T): Promise<void> {
+    const tx = this.db.transaction('docs', 'readwrite');
+    tx.objectStore('docs').put({ key, value });
     await done(tx);
   }
 }

@@ -195,7 +195,7 @@ export function restoreWorld(input: WorldSnapshot): World {
   w.slowAcc = snap.slowAcc;
   w.speciesTimer = snap.speciesTimer;
   w.ecologyTimer = snap.ecologyTimer;
-  w.ledger = { ...snap.ledger };
+  w.ledger = { ...snap.ledger, moved: snap.ledger.moved ?? 0 };
   w.counters = { ...snap.counters };
   w.ecology = clone(snap.ecology);
   for (const s of snap.species) w.species.set(s.id, clone(s));

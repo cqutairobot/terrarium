@@ -168,6 +168,58 @@ try {
       }, id);
       console.log(`[${size}] watched story: ${JSON.stringify(story)}`);
     }
+    if (scenario === 'tanks') {
+      // several tanks, moving a creature, catching up after an absence, reloading
+      const shot = async (name) => {
+        await page.waitForTimeout(600);
+        await page.screenshot({ path: `${out}/${size}-${name}.png` });
+      };
+      const tabs = () => page.locator('.tank-tab:not(.add)').count();
+      console.log(`[${size}] tanks at start: ${await tabs()}`);
+      await page.getByRole('button', { name: '新的水缸' }).click();
+      await page.waitForTimeout(1500);
+      console.log(`[${size}] tanks after +: ${await tabs()}`);
+      const moved = await page.evaluate(async () => {
+        const e = window.__eden;
+        const first = e.profile.tanks[0].id;
+        const c = e.world.creatures.find((x) => x.stage === 'adult' && x.dying === 0);
+        e.rename(c.id, '旅行者');
+        e.select(c.id);
+        return { id: c.id, first, from: e.tankId };
+      });
+      await page.waitForTimeout(500);
+      await page.locator('.creature-card .icon-btn[title="搬到另一个水缸"]').click();
+      await shot('move-menu');
+      await page.locator('.move-menu .btn').first().click();
+      await page.waitForTimeout(1500);
+      // pretend the first tank was left alone for twenty minutes, then visit it
+      await page.evaluate((first) => {
+        const e = window.__eden;
+        e.profile.tanks.find((t) => t.id === first).lastWall = Date.now() - 20 * 60 * 1000;
+      }, moved.first);
+      await page.locator('.tank-tab').first().click();
+      await page.waitForTimeout(700);
+      await shot('catch-up');
+      await page.waitForFunction(() => !window.__eden.catchUp, null, { timeout: 120000 });
+      await shot('away');
+      const after = await page.evaluate(() => {
+        const e = window.__eden;
+        const t = e.world.creatures.find((c) => c.customName === '旅行者');
+        return { tank: e.tankId, traveller: !!t, story: t ? e.world.history.stories.get(t.id)?.events.map((x) => x.k) : null, away: !!e.away, simTime: e.world.time };
+      });
+      console.log(`[${size}] after visiting: ${JSON.stringify(after)}`);
+      await page.getByRole('button', { name: '回到水缸' }).click();
+      await page.waitForTimeout(600);
+      await page.evaluate(() => window.__eden.saveActive());
+      await page.reload();
+      await page.waitForTimeout(2500);
+      const reloaded = await page.evaluate(() => {
+        const e = window.__eden;
+        return { tanks: e.profile.tanks.length, active: e.tankId, traveller: e.world.creatures.some((c) => c.customName === '旅行者') };
+      });
+      console.log(`[${size}] after reload: ${JSON.stringify(reloaded)}`);
+      await shot('reloaded');
+    }
     if (scenario === 'companion') {
       // desktop-companion behaviour: auto quality, settings, sound, still pointer, wallpaper mode
       await page.mouse.move(w / 2, h / 2);

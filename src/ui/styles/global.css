@@ -236,38 +236,84 @@ button {
 
 /* ---------------------------------------------------------- world chip */
 
-.world-chip {
+.top-bar {
   position: absolute;
-  left: 18px;
-  top: 16px;
+  left: 16px;
+  top: 14px;
+  right: 412px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  pointer-events: none;
+}
+
+.top-bar > * {
+  pointer-events: auto;
+}
+
+.tank-tabs {
+  display: flex;
+  gap: 2px;
+  padding: 3px;
+  border-radius: 12px;
+}
+
+.tank-tab {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 7px;
+  border: 0;
+  border-radius: 9px;
+  padding: 5px 11px;
+  background: transparent;
+  color: var(--eden-ink-soft);
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+  transition: background 0.2s ease, color 0.2s ease;
+}
+
+.tank-tab:hover:not(:disabled) {
+  background: rgba(190, 255, 236, 0.07);
+  color: var(--eden-ink);
+}
+
+.tank-tab.on {
+  background: var(--eden-accent-soft);
+  color: var(--eden-ink);
+  cursor: default;
+}
+
+.tank-tab:disabled {
+  cursor: default;
+}
+
+.tank-name {
+  letter-spacing: 0.08em;
+}
+
+.tank-pop {
+  font-size: 11px;
+  color: var(--eden-ink-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+.tank-tab.add {
+  padding: 5px 8px;
+  align-items: center;
+}
+
+.world-line-top {
   display: flex;
   flex-wrap: wrap;
   gap: 4px 12px;
   align-items: baseline;
-  padding: 8px 14px;
+  padding: 7px 13px;
   border-radius: 12px;
   font-size: 12px;
   color: var(--eden-ink-soft);
-  opacity: 0;
-  transform: translateY(-8px);
-  transition:
-    opacity 0.55s var(--ease),
-    transform 0.55s var(--ease);
-  max-width: min(640px, calc(100vw - 36px));
 }
-
-.world-chip.is-visible {
-  opacity: 1;
-  transform: none;
-}
-
-.world-chip b {
-  color: var(--eden-ink);
-  font-weight: 500;
-  letter-spacing: 0.08em;
-}
-
-/* ---------------------------------------------------------- drawer & panels */
 
 .drawer {
   position: absolute;
@@ -649,6 +695,11 @@ button {
   border: 1px solid rgba(190, 255, 236, 0.06);
 }
 
+.save-row.current {
+  border-color: rgba(159, 243, 224, 0.28);
+  background: rgba(159, 243, 224, 0.06);
+}
+
 .save-actions {
   display: flex;
   gap: 6px;
@@ -762,7 +813,7 @@ button {
 .card-head {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 6px;
 }
 
 .portrait-dot {
@@ -781,8 +832,14 @@ button {
 }
 
 .card-head .icon-btn {
-  width: 27px;
-  height: 27px;
+  width: 26px;
+  height: 26px;
+}
+
+.card-meta {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .card-name {
@@ -1278,6 +1335,131 @@ button {
 body.pointer-still,
 body.pointer-still * {
   cursor: none !important;
+}
+
+/* ---------------------------------------------------------- catch-up and away */
+
+.veil {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(2, 12, 16, 0.55);
+  pointer-events: auto;
+  animation: soft-in 0.6s ease;
+  z-index: 5;
+}
+
+.veil.soft {
+  background: rgba(2, 12, 16, 0.32);
+}
+
+.catch-up,
+.away-card {
+  width: min(520px, calc(100vw - 32px));
+  padding: 20px 22px;
+  border-radius: 18px;
+  background: var(--eden-glass-panel);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.catch-title {
+  font-size: 16px;
+  letter-spacing: 0.12em;
+}
+
+.catch-bar {
+  height: 6px;
+  border-radius: 3px;
+  background: rgba(190, 255, 236, 0.08);
+  overflow: hidden;
+}
+
+.catch-bar span {
+  display: block;
+  height: 100%;
+  border-radius: 3px;
+  background: linear-gradient(90deg, #7ee6cf, #bff7ea);
+  transition: width 0.4s ease;
+}
+
+.catch-foot {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.away-stats {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 6px;
+  margin: 4px 0;
+}
+
+.away-stats div {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 6px 4px;
+  border-radius: 10px;
+  background: rgba(190, 255, 236, 0.04);
+}
+
+.away-stats b {
+  font-weight: 500;
+  font-size: 13.5px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.away-stats span {
+  font-size: 11px;
+  color: var(--eden-ink-faint);
+}
+
+.away-events {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--eden-ink-soft);
+}
+
+.away-events li::before {
+  content: '·';
+  margin-right: 8px;
+  color: var(--eden-accent);
+}
+
+.away-events li.tier-3 {
+  color: var(--eden-ink);
+}
+
+.away-card .btn {
+  align-self: flex-end;
+}
+
+/* ---------------------------------------------------------- move menu */
+
+.move-menu {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 8px 0 2px;
+  padding: 8px;
+  border-radius: 10px;
+  background: rgba(0, 12, 16, 0.3);
+}
+
+.move-menu .btn {
+  text-align: left;
 }
 
 /* ---------------------------------------------------------- captions, hints, toasts */

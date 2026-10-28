@@ -11,12 +11,14 @@ export interface Prefs {
   captions: boolean;
   /** Hide the pointer after a few still seconds. */
   hideCursor: boolean;
+  /** Tanks keep living while nobody watches (made up for on return). */
+  offlineProgress: boolean;
 }
 
 const KEY = 'eden.prefs';
 
 export function loadPrefs(wallpaper: boolean): Prefs {
-  const base: Prefs = { quality: 'auto', powerSave: wallpaper, sound: false, volume: 0.6, captions: true, hideCursor: true };
+  const base: Prefs = { quality: 'auto', powerSave: wallpaper, sound: false, volume: 0.6, captions: true, hideCursor: true, offlineProgress: true };
   try {
     const raw = localStorage.getItem(KEY);
     if (!raw) return base;
@@ -28,6 +30,7 @@ export function loadPrefs(wallpaper: boolean): Prefs {
       volume: typeof p.volume === 'number' ? Math.max(0, Math.min(1, p.volume)) : base.volume,
       captions: p.captions !== false,
       hideCursor: p.hideCursor !== false,
+      offlineProgress: p.offlineProgress !== false,
     };
   } catch {
     return base;

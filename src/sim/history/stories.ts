@@ -17,6 +17,7 @@ export type StoryKind =
   | 'descendants'
   | 'death'
   | 'lineEnd'
+  | 'moved'
   | 'record';
 
 export interface StoryEntry {
@@ -151,6 +152,8 @@ export function narrateStory(s: LifeStory, e: StoryEntry): string {
       return `${p.how ?? `因${p.cause}离开了这个世界`}，享年${p.age}，留下了 ${p.children} 个孩子。`;
     case 'lineEnd':
       return `最后一个后裔也离开了。这条血脉延续了 ${p.n} 代。`;
+    case 'moved':
+      return `从「${p.from}」搬到了「${p.to}」。`;
     case 'record':
       return String(p.text ?? '');
   }

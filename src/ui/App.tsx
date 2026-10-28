@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import type { Engine } from '../engine/engine';
 import { platform } from '../platform';
-import { DISASTER_LABELS } from '../sim/environment';
 import { Captions } from './components/Captions';
 import { ArchivePanel } from './components/ArchivePanel';
+import { AwayCard, CatchUpOverlay } from './components/CatchUp';
 import { ChroniclePanel } from './components/ChroniclePanel';
 import { CodexPanel } from './components/CodexPanel';
 import { CreatureCard } from './components/CreatureCard';
@@ -11,8 +11,8 @@ import { Dock, type PanelId } from './components/Dock';
 import { EnvPanel } from './components/EnvPanel';
 import { LogPanel } from './components/LogPanel';
 import { StatsPanel } from './components/StatsPanel';
+import { TopBar } from './components/TopBar';
 import { WorldPanel } from './components/WorldPanel';
-import { formatDuration, worldClock } from './format';
 import { Icon } from './icons';
 import { useEngineVersion } from './useEngine';
 
@@ -154,7 +154,6 @@ export function App({ engine, wallpaper }: { engine: Engine; wallpaper: boolean 
     codex: ['生命图鉴', <CodexPanel engine={engine} />],
   };
   const open = panel && panel !== 'env' ? drawer[panel] : null;
-  const activeWeather = engine.world.env.events.filter((e) => !e.done);
 
   return (
     <div className={`eden-ui ${hidden ? 'is-hidden' : ''} ${dockVisible ? 'dock-open' : ''}`}>
@@ -163,27 +162,7 @@ export function App({ engine, wallpaper }: { engine: Engine; wallpaper: boolean 
         <div className="eden-title-sub">{engine.world.name}</div>
       </div>
 
-      {!hidden && (
-        <div className={`world-chip glass ${dockVisible ? 'is-visible' : ''}`}>
-          <b>{engine.world.name}</b>
-          <span>{worldClock(engine.world)}</span>
-          <span>
-            {engine.world.consumerCount + engine.world.predatorCount} 只 · 第 {engine.world.counters.generationsMax} 代
-          </span>
-          {engine.loop.paused && <span className="warm">已暂停</span>}
-          {!engine.loop.paused && engine.loop.timeScale !== 1 && (
-            <span>
-              {engine.loop.timeScale}×{engine.loop.achievedScale < engine.loop.timeScale * 0.9 ? `（实际 ${engine.loop.achievedScale.toFixed(1)}×）` : ''}
-            </span>
-          )}
-          {activeWeather.map((e) => (
-            <span key={e.id} className="warm">
-              {DISASTER_LABELS[e.kind]}中
-            </span>
-          ))}
-          <span className="muted">模拟 {formatDuration(engine.world.time)}</span>
-        </div>
-      )}
+      {!hidden && <TopBar engine={engine} />}
 
       {!hidden && selected && <CreatureCard engine={engine} c={selected} openStory={openStory} />}
 
@@ -212,6 +191,9 @@ export function App({ engine, wallpaper }: { engine: Engine; wallpaper: boolean 
       {!hidden && engine.aiming === 'meteor' && <div className="aim-hint glass">点击水中，选择流星坠落的地方 · 右键或 Esc 取消</div>}
 
       {!hidden && captions && <Captions engine={engine} />}
+
+      {engine.catchUp && <CatchUpOverlay engine={engine} />}
+      {!engine.catchUp && engine.away && !hidden && <AwayCard engine={engine} />}
 
       {(
         <div className="toasts">

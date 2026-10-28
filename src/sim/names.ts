@@ -57,6 +57,14 @@ const COLOR_STOPS: readonly [number, string, string][] = [
   [1.01, '绯', '绯红'],
 ];
 
+/** The named color bands, as hue intervals [from, to). */
+export const COLOR_BANDS: readonly { char: string; word: string; from: number; to: number }[] = COLOR_STOPS.slice(0, -1).map(([to, char, word], i) => ({
+  char,
+  word,
+  from: i === 0 ? -0.045 : COLOR_STOPS[i - 1][0],
+  to,
+}));
+
 /** One-character color word, e.g. 蓝. */
 export function colorChar(hue: number): string {
   const h = wrap01(hue);

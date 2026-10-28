@@ -33,6 +33,8 @@ export type StoryKind =
   | 'longevity'
   | 'elderDeath'
   | 'escape'
+  | 'movedIn'
+  | 'movedOut'
   | 'watchBorn'
   | 'watchFirstMeal'
   | 'watchParent'
@@ -179,6 +181,10 @@ export function narrate(e: StoryEvent): string {
       return fill('{name}在{age}之后安静地离开了，留下了 {children} 个孩子。', p);
     case 'escape':
       return fill('{name}从{predator}的追捕中逃脱了。', p);
+    case 'movedIn':
+      return fill('{name}从「{from}」搬来了这里。', p);
+    case 'movedOut':
+      return fill('{name}搬去了「{to}」。', p);
     case 'watchBorn':
       return fill('{name}出生在{place}，父母是{pa}与{pb}。', p);
     case 'watchFirstMeal':
