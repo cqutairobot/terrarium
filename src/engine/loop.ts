@@ -16,6 +16,8 @@ export class Loop {
   maxFps = 0;
   /** Effective speed actually achieved (may fall below timeScale if the CPU cannot keep up). */
   achievedScale = 1;
+  /** Smoothed milliseconds of work (simulation + drawing) per rendered frame. */
+  workMs = 0;
   private acc = 0;
   private last = -1;
   private lastRender = 0;
@@ -55,6 +57,7 @@ export class Loop {
     // clamp long gaps (tab switches, sleeps) so we never try to catch up
     const realDt = Math.min(0.25, (now - this.last) / 1000);
     this.last = now;
+    const t0 = performance.now();
     this.visualTime += realDt;
     if (!this.paused) {
       this.hooks.tick?.(realDt);
@@ -80,5 +83,6 @@ export class Loop {
     const renderDt = this.lastRender > 0 ? Math.min(0.25, (now - this.lastRender) / 1000) : realDt;
     this.lastRender = now;
     this.hooks.render(this.paused ? 1 : this.acc / this.simDt, renderDt, this.visualTime);
+    this.workMs += (performance.now() - t0 - this.workMs) * 0.1;
   };
 }

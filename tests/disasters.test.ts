@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { Series } from '../src/sim/history/series';
 import { updateProducers } from '../src/sim/systems/producers';
 import { thermalStress } from '../src/sim/systems/metabolism';
 import { World } from '../src/sim/world';
@@ -67,6 +68,37 @@ describe('disasters have real effects', () => {
     expect(end!.p.kind).toBe('bloom');
     // a bloom should not shrink the meadow
     expect(Number(end!.p.plantPct)).toBeGreaterThan(-10);
+  });
+
+  it('does not blame an event for a decline that was already under way', () => {
+    const w = emptyWorld('trend');
+    w.env.settings.naturalWeather = false;
+    // a closed meadow: nothing grows or spreads, so only our hand changes it
+    w.cfg.plantGrowth = 0;
+    w.cfg.maxPlants = 10;
+    const plants = Array.from({ length: 10 }, (_, i) => addPlant(w, 200 + i * 120, 0.66));
+    for (const p of plants) p.biomass = 100;
+    w.time = 700;
+    // the last ten minutes: the meadow was shrinking by 0.8 biomass per second
+    const rate = 0.8;
+    w.history.series = new Series();
+    for (let k = 60; k >= 1; k--) {
+      w.history.series.add({
+        t: w.time - k * 10, w: w.clock() - k * 10000, cons: 0, pred: 0, eggs: 0, plants: 10, algae: 0, fungi: 0,
+        plantMass: 1000 + rate * k * 10, coverage: 0.2, births: 0, deaths: 0, lifespan: 0, size: 0, speed: 0, sense: 0,
+        metab: 0, maxGen: 0, temp: 0.5, light: 1, nutrient: 0, species: [],
+      });
+    }
+    w.disaster('storm');
+    // ... and it simply keeps shrinking at the same pace while the storm passes
+    for (let s = 0; s < 200; s++) {
+      for (const p of plants) p.biomass = Math.max(0, p.biomass - rate / plants.length);
+      w.ecology.consumerGoneAt = w.time; // keep dormant spores asleep: no grazers in this test
+      stepFor(w, 1);
+    }
+    const end = w.history.log.toArray().find((e) => e.k === 'disasterEnd');
+    expect(end).toBeTruthy();
+    expect(Math.abs(Number(end!.p.plantPct))).toBeLessThan(5);
   });
 
   it('feeding adds real food that grazers can find, and the ledger notices', () => {

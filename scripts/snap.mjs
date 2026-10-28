@@ -1,6 +1,7 @@
 /**
  * Visual + runtime check with the pre-installed Playwright Chromium.
  *   npm run build && node scripts/snap.mjs [--seed eden] [--size 1920x1080] [--out snapshots]
+ *     [--scenario basic|zoom|soul|companion] [--quality auto|0|1|2]
  * Serves dist/ with `vite preview`, takes screenshots at several moments,
  * measures frame rate and reports console errors.
  */
@@ -21,6 +22,7 @@ const sizes = arg('size', '1920x1080').split(',');
 const out = arg('out', 'snapshots');
 const port = Number(arg('port', '4173'));
 const scenario = arg('scenario', 'basic');
+const quality = arg('quality', 'auto');
 mkdirSync(out, { recursive: true });
 
 const server = spawn(process.execPath, ['node_modules/vite/bin/vite.js', 'preview', '--port', String(port), '--strictPort'], {
@@ -56,6 +58,9 @@ try {
       if (m.type() === 'error') errors.push(m.text());
     });
     page.on('pageerror', (e) => errors.push(String(e)));
+    if (quality !== 'auto') {
+      await page.addInitScript((q) => localStorage.setItem('eden.prefs', JSON.stringify({ quality: q })), Number(quality));
+    }
     await page.goto(`http://localhost:${port}/?seed=${encodeURIComponent(seed)}`);
     await page.waitForTimeout(2500);
     await page.screenshot({ path: `${out}/${size}-start.png` });
@@ -162,6 +167,33 @@ try {
         return s ? { events: s.events.length, descendants: s.descendants, living: s.living, depth: s.maxDepth } : null;
       }, id);
       console.log(`[${size}] watched story: ${JSON.stringify(story)}`);
+    }
+    if (scenario === 'companion') {
+      // desktop-companion behaviour: auto quality, settings, sound, still pointer, wallpaper mode
+      await page.mouse.move(w / 2, h / 2);
+      await page.waitForTimeout(8000);
+      const q = await page.evaluate(() => ({ quality: window.__eden.renderer.quality, work: window.__eden.loop.workMs }));
+      console.log(`[${size}] auto quality → ${q.quality} (work ${q.work.toFixed(1)} ms/frame)`);
+      const still = await page.evaluate(() => document.body.classList.contains('pointer-still'));
+      console.log(`[${size}] pointer hidden after stillness: ${still}`);
+      await page.mouse.move(w / 2, h - 12);
+      await page.waitForTimeout(900);
+      await page.getByRole('button', { name: '世界与设置' }).click();
+      await page.waitForTimeout(500);
+      await page.locator('.panel-body').evaluate((el) => (el.scrollTop = el.scrollHeight));
+      await page.getByRole('button', { name: '声音' }).click();
+      await page.waitForTimeout(1200);
+      const audio = await page.evaluate(() => ({ on: window.__eden.audio.enabled, pref: window.__eden.prefs.sound }));
+      console.log(`[${size}] sound: ${JSON.stringify(audio)}`);
+      await page.screenshot({ path: `${out}/${size}-settings.png` });
+      const wp = await browser.newPage({ viewport: { width: w, height: h } });
+      wp.on('pageerror', (e) => errors.push(String(e)));
+      await wp.goto(`http://localhost:${port}/?seed=${encodeURIComponent(seed)}&wallpaper`);
+      await wp.waitForTimeout(3000);
+      const wpInfo = await wp.evaluate(() => ({ hidden: window.__eden.uiHidden, maxFps: window.__eden.loop.maxFps }));
+      console.log(`[${size}] wallpaper mode: ${JSON.stringify(wpInfo)}`);
+      await wp.screenshot({ path: `${out}/${size}-wallpaper.png` });
+      await wp.close();
     }
     if (errors.length) {
       failed = true;

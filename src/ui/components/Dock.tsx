@@ -96,12 +96,20 @@ export function Dock({ engine, visible, panel, setPanel, onHide, onFullscreen, o
           </button>
         ))}
         {extra}
-        <button className={`dock-btn ${panel === 'world' ? 'on' : ''}`} data-tip="世界与存档" aria-label="世界与存档" onClick={() => toggle('world')}>
+        <button className={`dock-btn ${panel === 'world' ? 'on' : ''}`} data-tip="世界、存档与设置" aria-label="世界与设置" onClick={() => toggle('world')}>
           <Icon.world />
         </button>
       </div>
       <i className="dock-sep" />
       <div className="dock-group">
+        <button
+          className={`dock-btn ${engine.prefs.sound ? 'on' : ''}`}
+          data-tip={engine.prefs.sound ? '关闭声音 (M)' : '打开环境声音 (M)'}
+          aria-label="声音"
+          onClick={() => void engine.toggleSound()}
+        >
+          {engine.prefs.sound ? <Icon.sound /> : <Icon.mute />}
+        </button>
         <button className="dock-btn" data-tip="全屏 (F)" aria-label="全屏" onClick={onFullscreen}>
           <Icon.fullscreen />
         </button>

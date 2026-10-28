@@ -8,6 +8,9 @@ import { TrendChart } from './TrendChart';
 
 type Win = 3600 | 86400 | 604800 | 0;
 
+/** Rows drawn at a time; a long history is paged rather than drawn all at once. */
+const PAGE = 120;
+
 const CATEGORIES: [StoryCategory, string][] = [
   ['world', '世界'],
   ['species', '族群'],
@@ -25,6 +28,7 @@ export function ChroniclePanel({ engine }: { engine: Engine }) {
   const [win, setWin] = useState<Win>(86400);
   const [axis, setAxis] = useState<'sim' | 'real'>('sim');
   const [majorOnly, setMajorOnly] = useState(false);
+  const [shown, setShown] = useState(PAGE);
   const [cats, setCats] = useState<Set<StoryCategory>>(() => new Set(CATEGORIES.map(([c]) => c)));
   const toggleCat = (c: StoryCategory) => {
     const next = new Set(cats);
@@ -84,10 +88,15 @@ export function ChroniclePanel({ engine }: { engine: Engine }) {
         只看重大事件
       </label>
       <div className="event-list">
-        {events.map((e) => (
+        {events.slice(0, shown).map((e) => (
           <EventRow key={e.id} e={e} engine={engine} showWall />
         ))}
         {events.length === 0 && <div className="muted small">这段时间里，世界很安静。</div>}
+        {events.length > shown && (
+          <button className="link more" onClick={() => setShown(shown + PAGE)}>
+            更早的 {events.length - shown} 件事…
+          </button>
+        )}
       </div>
     </div>
   );

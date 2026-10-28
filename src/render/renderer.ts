@@ -216,7 +216,8 @@ export class Renderer {
     if (!this.bg.isOverview(cam)) this.bg.drawVignette(ctx, cam);
 
     if (this.frame % 120 === 0) {
-      for (const [id, v] of this.visuals) if (this.frame - v.seen > 240) this.visuals.delete(id);
+      // forget the departed (and anyone long out of view), however fast time is running
+      for (const [id, v] of this.visuals) if (!world.creatureMap.has(id) || this.frame - v.seen > 240) this.visuals.delete(id);
     }
   }
 }

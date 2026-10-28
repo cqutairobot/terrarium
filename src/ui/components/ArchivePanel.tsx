@@ -194,7 +194,7 @@ function StoryView({ engine, s, back }: { engine: Engine; s: LifeStory; back: ()
       {s.watched && (
         <>
           <div className="section-title">家族树</div>
-          <FamilyTree engine={engine} root={s.id} />
+          <FamilyTree engine={engine} root={s.id} stamp={Math.floor(world.time / 4)} selected={engine.renderer.selectedId} />
         </>
       )}
     </div>

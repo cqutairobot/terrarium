@@ -1,3 +1,4 @@
+import { Ambient } from '../audio/ambient';
 import type { StorageAdapter, SaveMeta } from '../persist/storage';
 import { downloadSnapshot, readSnapshotFile } from '../persist/exportImport';
 import { Renderer } from '../render/renderer';
@@ -9,6 +10,7 @@ import { restoreWorld, snapshotWorld } from '../sim/serialize';
 import { SIM_DT, World } from '../sim/world';
 import { Input } from './input';
 import { Loop } from './loop';
+import { loadPrefs, savePrefs, type Prefs } from './prefs';
 
 export type FoodTool = 'none' | FoodKind;
 
@@ -29,6 +31,8 @@ export interface LostFollow {
 
 export const AUTOSAVE_ID = 'autosave';
 const AUTOSAVE_EVERY = 60;
+/** In power-saving (wallpaper) mode the world is written less often. */
+const AUTOSAVE_EVERY_QUIET = 180;
 
 export function randomSeed(): string {
   const words = ['苔', '汐', '萤', '澜', '雾', '星', '露', '溪', '岚', '珀'];
@@ -50,6 +54,12 @@ export class Engine {
   toasts: Toast[] = [];
   lastSavedAt = 0;
   lostFollow: LostFollow | null = null;
+  prefs: Prefs;
+  readonly audio = new Ambient();
+  private qualityAcc = 0;
+  private slowWindows = 0;
+  private fastWindows = 0;
+  private qualityCooldown = 0;
   private listeners = new Set<() => void>();
   private publishAcc = 0;
   private autosaveAcc = 0;
@@ -61,21 +71,33 @@ export class Engine {
     readonly canvas: HTMLCanvasElement,
     world: World,
     readonly storage: StorageAdapter,
+    opts: { wallpaper?: boolean } = {},
   ) {
     this.world = world;
+    this.prefs = loadPrefs(opts.wallpaper ?? false);
+    this.uiHidden = opts.wallpaper ?? false;
     this.renderer = new Renderer(canvas, world);
     this.loop = new Loop(SIM_DT, {
       step: (dt) => this.world.step(dt),
       tick: (realDt) => {
         this.world.realTime += realDt;
         this.autosaveAcc += realDt;
-        if (this.autosaveAcc >= AUTOSAVE_EVERY) {
+        if (this.autosaveAcc >= (this.prefs.powerSave ? AUTOSAVE_EVERY_QUIET : AUTOSAVE_EVERY)) {
           this.autosaveAcc = 0;
           this.idle(() => void this.save('auto'));
         }
+        this.qualityAcc += realDt;
+        if (this.qualityAcc >= 2) {
+          this.qualityAcc = 0;
+          this.adaptQuality();
+        }
       },
       render: (alpha, dt, vt) => {
-        for (const e of this.world.drainFx()) this.renderer.effects.handle(e);
+        for (const e of this.world.drainFx()) {
+          this.renderer.effects.handle(e);
+          this.audio.handle(e);
+        }
+        this.audio.update(this.world);
         this.watchFollow();
         this.renderer.render(alpha, dt, vt);
         this.publishAcc += dt;
@@ -86,6 +108,17 @@ export class Engine {
       },
     });
     this.input = new Input(canvas, this);
+    this.applyPrefs();
+    if (this.prefs.sound) {
+      // browsers only let sound start from a gesture: resume on the first one
+      const wake = () => {
+        window.removeEventListener('pointerdown', wake);
+        window.removeEventListener('keydown', wake);
+        if (this.prefs.sound) void this.audio.enable();
+      };
+      window.addEventListener('pointerdown', wake);
+      window.addEventListener('keydown', wake);
+    }
     window.addEventListener('resize', this.onResize);
     document.addEventListener('visibilitychange', this.onVisibility);
     window.addEventListener('pagehide', this.onPageHide);
@@ -110,7 +143,11 @@ export class Engine {
       // the world rests while nobody can see it; keep it safe first
       void this.save('auto');
       this.loop.stop();
-    } else this.loop.start();
+      this.audio.pause();
+    } else {
+      this.loop.start();
+      this.audio.resume();
+    }
   };
 
   private onPageHide = (): void => {
@@ -286,6 +323,66 @@ export class Engine {
   setUiHidden(hidden: boolean): void {
     this.uiHidden = hidden;
     this.publish();
+  }
+
+  // ------------------------------------------------------------ preferences
+
+  setPref<K extends keyof Prefs>(key: K, value: Prefs[K]): void {
+    this.prefs = { ...this.prefs, [key]: value };
+    savePrefs(this.prefs);
+    this.applyPrefs();
+    this.publish();
+  }
+
+  private applyPrefs(): void {
+    const p = this.prefs;
+    this.loop.maxFps = p.powerSave ? 30 : 0;
+    if (p.quality !== 'auto') this.renderer.quality = p.quality;
+    this.audio.setVolume(p.volume);
+  }
+
+  async toggleSound(): Promise<void> {
+    if (this.prefs.sound) {
+      this.audio.disable();
+      this.setPref('sound', false);
+      return;
+    }
+    const ok = await this.audio.enable();
+    if (ok) this.setPref('sound', true);
+    else this.toast('浏览器暂时不允许播放声音');
+  }
+
+  /**
+   * Automatic quality: step the detail down when frames take too long and
+   * back up (slowly, with a cooldown) when there is plenty of headroom.
+   */
+  private adaptQuality(): void {
+    if (this.prefs.quality !== 'auto' || this.loop.paused) return;
+    const budget = 1000 / (this.loop.maxFps > 0 ? this.loop.maxFps : 60);
+    const work = this.loop.workMs;
+    const r = this.renderer;
+    this.qualityCooldown = Math.max(0, this.qualityCooldown - 2);
+    if (work > budget * 0.85) {
+      this.slowWindows++;
+      this.fastWindows = 0;
+    } else if (work < budget * 0.4) {
+      this.fastWindows++;
+      this.slowWindows = 0;
+    } else {
+      this.slowWindows = 0;
+      this.fastWindows = 0;
+    }
+    if (this.slowWindows >= 2 && r.quality > 0) {
+      r.quality = (r.quality - 1) as 0 | 1;
+      this.slowWindows = 0;
+      this.qualityCooldown = 40;
+      this.publish();
+    } else if (this.fastWindows >= 6 && r.quality < 2 && this.qualityCooldown <= 0) {
+      r.quality = (r.quality + 1) as 1 | 2;
+      this.fastWindows = 0;
+      this.qualityCooldown = 20;
+      this.publish();
+    }
   }
 
   // ------------------------------------------------------------ worlds

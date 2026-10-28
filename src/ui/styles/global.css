@@ -141,6 +141,8 @@ button {
   transition:
     opacity 0.55s var(--ease),
     transform 0.55s var(--ease);
+  /* an absolutely placed box at left: 50% would otherwise shrink to half the screen */
+  width: max-content;
   max-width: calc(100vw - 24px);
   flex-wrap: wrap;
   justify-content: center;
@@ -543,6 +545,11 @@ button {
 
 .event.clickable:hover {
   background: rgba(190, 255, 236, 0.05);
+}
+
+.link.more {
+  margin: 8px 0 4px;
+  font-size: 12px;
 }
 
 .event-time {
@@ -1258,6 +1265,21 @@ button {
   color: var(--eden-ink-soft);
 }
 
+.setting-label {
+  align-self: center;
+  min-width: 30px;
+}
+
+.hint-block {
+  margin-top: 12px;
+  line-height: 1.7;
+}
+
+body.pointer-still,
+body.pointer-still * {
+  cursor: none !important;
+}
+
 /* ---------------------------------------------------------- captions, hints, toasts */
 
 .caption {
@@ -1276,13 +1298,19 @@ button {
   transform: translateY(6px);
   transition:
     opacity 1.4s ease,
-    transform 1.4s ease;
+    transform 1.4s ease,
+    bottom 0.55s var(--ease);
   pointer-events: none;
 }
 
 .caption.is-visible {
   opacity: 1;
   transform: none;
+}
+
+/* make room for the dock when it rises */
+.dock-open .caption {
+  bottom: 96px;
 }
 
 .caption.tier-3 {

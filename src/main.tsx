@@ -1,7 +1,7 @@
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { AUTOSAVE_ID, Engine, randomSeed } from './engine/engine';
-import { openStorage } from './persist/idb';
+import { platform } from './platform';
 import { restoreWorld } from './sim/serialize';
 import { World } from './sim/world';
 import { App } from './ui/App';
@@ -14,7 +14,7 @@ async function boot(): Promise<void> {
   stage.appendChild(canvas);
 
   const params = new URLSearchParams(location.search);
-  const storage = await openStorage();
+  const storage = await platform.openStorage();
   const aspect = window.innerWidth / Math.max(1, window.innerHeight);
 
   // continue the last world unless a new one is asked for
@@ -29,8 +29,7 @@ async function boot(): Promise<void> {
   }
   if (!world) world = new World({ seed: params.get('seed') ?? randomSeed(), aspect });
 
-  const engine = new Engine(canvas, world, storage);
-  if (params.has('wallpaper')) engine.uiHidden = true;
+  const engine = new Engine(canvas, world, storage, { wallpaper: params.has('wallpaper') });
   engine.start();
   // debug handle for automated checks and the curious
   (window as unknown as { __eden: Engine }).__eden = engine;

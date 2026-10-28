@@ -1,3 +1,4 @@
+import { memo } from 'react';
 import type { Engine } from '../../engine/engine';
 import { hsl } from '../../render/color';
 import type { LineageNode } from '../../sim/history/lineage';
@@ -17,8 +18,9 @@ interface Placed {
 /**
  * The bloodline of a watched creature: the kept genealogy from the root to
  * its living descendants (dead side branches fall away over time).
+ * Redrawn only when `stamp` (a coarse clock) or the selection changes.
  */
-export function FamilyTree({ engine, root }: { engine: Engine; root: number }) {
+export const FamilyTree = memo(function FamilyTree({ engine, root }: { engine: Engine; root: number; stamp: number; selected: number }) {
   const world = engine.world;
   const lin = world.history.lineage;
   const { nodes, parent } = lin.tree(root);
@@ -123,4 +125,4 @@ export function FamilyTree({ engine, root }: { engine: Engine; root: number }) {
       </div>
     </div>
   );
-}
+});

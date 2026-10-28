@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import type { Engine } from '../engine/engine';
+import { platform } from '../platform';
 import { DISASTER_LABELS } from '../sim/environment';
 import { Captions } from './components/Captions';
 import { ArchivePanel } from './components/ArchivePanel';
@@ -16,29 +17,6 @@ import { Icon } from './icons';
 import { useEngineVersion } from './useEngine';
 
 const EDGE = 110;
-
-function usePersistentFlag(key: string, initial: boolean): [boolean, (v: boolean) => void] {
-  const [v, setV] = useState(() => {
-    try {
-      const s = localStorage.getItem(key);
-      return s === null ? initial : s === '1';
-    } catch {
-      return initial;
-    }
-  });
-  const set = useCallback(
-    (nv: boolean) => {
-      setV(nv);
-      try {
-        localStorage.setItem(key, nv ? '1' : '0');
-      } catch {
-        /* storage unavailable: keep it for this session only */
-      }
-    },
-    [key],
-  );
-  return [v, set];
-}
 
 const HEIR_WORDS = { child: '它的孩子', descendant: '它的后代', family: '它的家人', none: '' } as const;
 
@@ -64,10 +42,7 @@ function LostFollowPrompt({ engine }: { engine: Engine }) {
   );
 }
 
-function toggleFullscreen(): void {
-  if (document.fullscreenElement) void document.exitFullscreen();
-  else void document.documentElement.requestFullscreen?.().catch(() => undefined);
-}
+const toggleFullscreen = () => platform.toggleFullscreen();
 
 export function App({ engine, wallpaper }: { engine: Engine; wallpaper: boolean }) {
   useEngineVersion(engine);
@@ -75,7 +50,8 @@ export function App({ engine, wallpaper }: { engine: Engine; wallpaper: boolean 
   const [nearEdge, setNearEdge] = useState(false);
   const [dockHover, setDockHover] = useState(false);
   const [boot, setBoot] = useState(!wallpaper);
-  const [captions, setCaptions] = usePersistentFlag('eden.captions', true);
+  const captions = engine.prefs.captions;
+  const [still, setStill] = useState(false);
   const [showTitle, setShowTitle] = useState(!wallpaper);
   const [storyFocus, setStoryFocus] = useState<number | null>(null);
   const openStory = useCallback((id: number) => {
@@ -93,15 +69,29 @@ export function App({ engine, wallpaper }: { engine: Engine; wallpaper: boolean 
   }, []);
 
   useEffect(() => {
-    const onMove = (e: MouseEvent) => setNearEdge(e.clientY > window.innerHeight - EDGE);
+    let timer = 0;
+    const onMove = (e: MouseEvent) => {
+      setNearEdge(e.clientY > window.innerHeight - EDGE);
+      setStill(false);
+      clearTimeout(timer);
+      timer = window.setTimeout(() => setStill(true), 3000);
+    };
     const onLeave = () => setNearEdge(false);
     window.addEventListener('mousemove', onMove);
+    window.addEventListener('pointerdown', onMove);
     document.addEventListener('mouseleave', onLeave);
     return () => {
+      clearTimeout(timer);
       window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('pointerdown', onMove);
       document.removeEventListener('mouseleave', onLeave);
     };
   }, []);
+
+  // a still pointer fades away, so the tank can be watched undisturbed
+  useEffect(() => {
+    document.body.classList.toggle('pointer-still', still && engine.prefs.hideCursor && engine.aiming === null);
+  }, [still, engine.prefs.hideCursor, engine.aiming]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -116,6 +106,10 @@ export function App({ engine, wallpaper }: { engine: Engine; wallpaper: boolean 
         case 'f':
         case 'F':
           toggleFullscreen();
+          break;
+        case 'm':
+        case 'M':
+          void engine.toggleSound();
           break;
         case ' ':
           e.preventDefault();
@@ -135,6 +129,7 @@ export function App({ engine, wallpaper }: { engine: Engine; wallpaper: boolean 
           break;
         case 'Escape':
           if (engine.aiming) engine.aim(null);
+          else if (engine.lostFollow) engine.dismissLost();
           else if (panel) setPanel(null);
           else if (engine.renderer.selectedId) engine.select(0);
           else if (engine.uiHidden) engine.setUiHidden(false);
@@ -154,7 +149,7 @@ export function App({ engine, wallpaper }: { engine: Engine; wallpaper: boolean 
     stats: ['生态统计', <StatsPanel engine={engine} />],
     log: ['事件日志', <LogPanel engine={engine} />],
     chronicle: ['世界编年史', <ChroniclePanel engine={engine} />],
-    world: ['世界与存档', <WorldPanel engine={engine} />],
+    world: ['世界与设置', <WorldPanel engine={engine} />],
     archive: ['生命档案馆', <ArchivePanel engine={engine} focus={storyFocus} setFocus={setStoryFocus} />],
     codex: ['生命图鉴', <CodexPanel engine={engine} />],
   };
@@ -162,7 +157,7 @@ export function App({ engine, wallpaper }: { engine: Engine; wallpaper: boolean 
   const activeWeather = engine.world.env.events.filter((e) => !e.done);
 
   return (
-    <div className={`eden-ui ${hidden ? 'is-hidden' : ''}`}>
+    <div className={`eden-ui ${hidden ? 'is-hidden' : ''} ${dockVisible ? 'dock-open' : ''}`}>
       <div className={`eden-title ${showTitle ? 'is-visible' : ''}`} aria-hidden={!showTitle}>
         <div className="eden-title-main">浮生</div>
         <div className="eden-title-sub">{engine.world.name}</div>
@@ -205,7 +200,7 @@ export function App({ engine, wallpaper }: { engine: Engine; wallpaper: boolean 
           {open[1]}
           {panel === 'log' && (
             <label className="toggle-line drawer-foot">
-              <input type="checkbox" checked={captions} onChange={(e) => setCaptions(e.target.checked)} />
+              <input type="checkbox" checked={captions} onChange={(e) => engine.setPref('captions', e.target.checked)} />
               在画面上轻轻显示重要事件
             </label>
           )}
