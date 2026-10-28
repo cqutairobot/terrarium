@@ -7,6 +7,8 @@ export interface EcoConfig {
   maxCreatures: number;
   softCap: number;
   maxPredators: number;
+  /** Territorial limit: predator breeding halves around this many hunters. */
+  predatorSoftCap: number;
   maxPlants: number;
   maxAlgae: number;
   maxFungi: number;
@@ -64,20 +66,21 @@ export interface EcoConfig {
 
 export const DEFAULT_CONFIG: EcoConfig = {
   maxCreatures: 320,
-  softCap: 240,
+  softCap: 190,
   maxPredators: 24,
+  predatorSoftCap: 6,
   maxPlants: 140,
   maxAlgae: 220,
   maxFungi: 90,
   maxFood: 160,
-  maxCorpses: 40,
+  maxCorpses: 70,
   maxSeeds: 30,
 
   dayLength: 1200,
   seasonLength: 7200,
 
-  basalCoeff: 0.32,
-  moveCoeff: 0.35,
+  basalCoeff: 0.18,
+  moveCoeff: 0.2,
   refSpeed: 50,
   excretion: 0.75,
   structurePerMass: 60,
@@ -87,9 +90,9 @@ export const DEFAULT_CONFIG: EcoConfig = {
   hatchTime: 8,
   dyingTime: 3.2,
 
-  plantGrowth: 0.12,
+  plantGrowth: 0.2,
   plantMaxBiomass: 150,
-  algaeGrowth: 0.12,
+  algaeGrowth: 0.18,
   algaeMaxBiomass: 30,
   fungusGrowth: 0.05,
   fungusMaxBiomass: 30,
@@ -100,7 +103,7 @@ export const DEFAULT_CONFIG: EcoConfig = {
   fungusSpawnRate: 0.02,
 
   nutrientCell: 50,
-  nutrientTarget: 65,
+  nutrientTarget: 110,
   nutrientRelax: 0.01,
   diffusion: 0.08,
   sinking: 0.02,

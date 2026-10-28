@@ -286,7 +286,7 @@ export function express(genome: Genome): Phenotype {
   const radius = 4.5 + 21 * Math.pow(size, 1.2);
   const rel = radius / 6;
   const mass = rel * rel * (1 + 0.35 * armor);
-  const M = 0.6 + 1.0 * metab;
+  const M = 0.3 + 1.25 * metab;
 
   const tentacleCount = Math.min(6, Math.floor(tentGene * 7)) + rare.extraTentacles;
   const twin = rare.twinTail ? 1 : 0;
@@ -308,22 +308,22 @@ export function express(genome: Genome): Phenotype {
 
   // energetics (Kleiber) — appendages cost drag and upkeep
   const drag = (1 + 0.04 * tentacleCount) * (1 + 0.08 * fin) * (1 + 0.1 * twin) * (1 + 0.05 * tail);
-  const basalFactor = Math.pow(mass, 0.75) * M * (1 + 0.25 * armor);
-  const upkeep = 0.03 * eye + 0.04 * special + 0.01 * tentacleCount;
+  const basalFactor = Math.pow(mass, 0.7) * M * (1 + 0.25 * armor);
+  const upkeep = 0.015 * eye + 0.02 * special + 0.005 * tentacleCount;
   const moveCoeff = Math.pow(mass, 0.75) * drag;
-  const senseCost = 0.0004 * senseRadius;
+  const senseCost = 0.00025 * senseRadius;
 
-  const lifespan = ((240 + 660 * v('longevity')) * Math.pow(rel, 0.55)) / Math.sqrt(M);
+  const lifespan = ((360 + 780 * v('longevity')) * Math.pow(rel, 0.55)) / Math.sqrt(M);
   const maturityAge = lifespan * 0.22 * (1.15 - 0.3 * metab);
 
   const fert = v('fertility');
-  const reproThreshold = 0.55 + 0.25 * (1 - fert);
+  const reproThreshold = 0.5 + 0.2 * (1 - fert);
   const investFraction = 0.35 + 0.4 * (1 - fert);
   const reproCooldown = ((45 + 70 * (1 - fert)) * Math.sqrt(rel)) / M;
   const twinChance = 0.25 * fert * fert;
 
   const aggression = v('aggression');
-  const attack = (4 + 10 * aggression) * Math.pow(mass, 0.7) * (1 + 0.5 * diet);
+  const attack = (6 + 14 * aggression) * Math.pow(mass, 0.7) * (1 + 0.5 * diet);
   const defense = 0.6 * armor;
 
   const herbEff = 0.85 * Math.pow(1 - diet, 1.6);

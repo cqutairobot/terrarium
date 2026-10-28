@@ -1,7 +1,8 @@
 import { hueDist, lerp } from '../core/math';
+import { freshness } from '../entities/corpse';
 import type { Creature, TargetKind } from '../entities/creature';
 import type { FoodKind } from '../entities/food';
-import { plantHeight, type Producer, type ProducerKind } from '../entities/producer';
+import { grazable, plantHeight, type Producer, type ProducerKind } from '../entities/producer';
 import { compatibility } from '../genome';
 import type { World } from '../world';
 
@@ -24,12 +25,18 @@ export interface Perception {
   kinY: number;
   kinVx: number;
   kinVy: number;
+  /** Kin seen fleeing (many eyes): count and where their fear came from. */
+  alarm: number;
+  alarmX: number;
+  alarmY: number;
   crowd: number;
   social: Creature | null;
   parent: Creature | null;
   restX: number;
   restY: number;
   restFound: boolean;
+  /** Grazable food in sight divided by kin in sight (local plenty). */
+  foodPerHead: number;
 }
 
 export const perception: Perception = {
@@ -50,12 +57,16 @@ export const perception: Perception = {
   kinY: 0,
   kinVx: 0,
   kinVy: 0,
+  alarm: 0,
+  alarmX: 0,
+  alarmY: 0,
   crowd: 0,
   social: null,
   parent: null,
   restX: 0,
   restY: 0,
   restFound: false,
+  foodPerHead: 0,
 };
 
 const buf: number[] = [];
@@ -101,12 +112,22 @@ export function backgroundHue(world: World, x: number, y: number): number {
   return lerp(0.48, 0.57, y / world.height);
 }
 
+/** Is a point inside the leafy cover of some plant? */
+export function inCover(world: World, x: number, y: number): boolean {
+  for (const p of world.plants) {
+    if (p.biomass < 20 || Math.abs(p.x - x) > 22) continue;
+    if (y > p.y - plantHeight(p)) return true;
+  }
+  return false;
+}
+
 /** How far away a predator can notice this creature, as a factor of its sense radius. */
 export function visibilityFactor(world: World, prey: Creature): number {
   const night = 1 - world.env.daylight;
   const camo = 1 - hueDist(prey.ph.hue, backgroundHue(world, prey.x, prey.y)) * 2;
   let v = prey.ph.visibility * (1 - 0.4 * camo);
   if (prey.state === 'rest') v *= 0.75;
+  if (inCover(world, prey.x, prey.y)) v *= 0.5;
   if (prey.ph.rare.fluorescent) v *= 1 + 0.35 * night;
   if (prey.glowT > 0) v *= 1.25;
   return Math.max(0.2, Math.min(1.6, v));
@@ -134,12 +155,15 @@ export function perceive(world: World, c: Creature): Perception {
   p.kinY = 0;
   p.kinVx = 0;
   p.kinVy = 0;
+  p.alarm = 0;
   p.crowd = 0;
   p.social = null;
   p.parent = null;
   p.restFound = false;
+  p.foodPerHead = 0;
 
   const carnivorous = ph.diet > 0.55;
+  const hungry = c.energy < maxEnergyOf(c) * 0.3;
   const breeding = canBreed(c);
   let socialBest = 1e9;
 
@@ -154,21 +178,27 @@ export function perceive(world: World, c: Creature): Perception {
     const oR = bodyRadius(o);
     if (d < r * 3 + oR) p.crowd++;
 
-    // predators that could swallow me
+    // predators that could swallow me; a slow, stalking hunter is noticed late
     if (o.ph.diet > 0.55 && o.speciesId !== c.speciesId && r <= oR * 0.8) {
-      const level = (1 - d / sense) * (o.state === 'hunt' ? 1.6 : 0.85) * o.ph.diet;
-      if (level > p.threatLevel) {
-        p.threatLevel = level;
-        p.threat = o;
+      const sprinting = Math.hypot(o.vx, o.vy) > o.ph.maxSpeed * 0.6;
+      const camo = 1 - hueDist(o.ph.hue, backgroundHue(world, o.x, o.y)) * 2;
+      const detect = sense * (sprinting ? 1 : 0.55) * (1 - 0.25 * camo);
+      if (d < detect) {
+        const near = 1 - d / detect;
+        const level = Math.sqrt(near) * (o.state === 'hunt' ? (sprinting ? 1.6 : 0.9) : 0.18) * o.ph.diet;
+        if (level > p.threatLevel) {
+          p.threatLevel = level;
+          p.threat = o;
+        }
       }
     }
-    // prey I could swallow
-    if (carnivorous && o.ph.diet < 0.6 && o.speciesId !== c.speciesId && oR <= r * 0.8) {
+    // prey I could swallow — worth the chase only if the meal is big enough (optimal foraging)
+    if (carnivorous && o.ph.diet < 0.6 && o.speciesId !== c.speciesId && oR <= r * 0.8 && (oR >= r * 0.35 || hungry)) {
       const detect = sense * visibilityFactor(world, o);
       if (d < detect) {
         const weak = 1 - o.health / o.ph.maxHealth;
-        const score =
-          (1 - d / detect) + 0.5 * weak + (o.stage === 'juvenile' || o.stage === 'elder' ? 0.2 : 0) + 0.3 * (oR / r);
+        const size = oR / (r * 0.8);
+        const score = (1 - d / detect) * 0.8 + 0.5 * weak + 0.8 * size * size + (o.stage === 'elder' ? 0.15 : 0);
         if (score > p.preyScore) {
           p.preyScore = score;
           p.prey = o;
@@ -176,6 +206,14 @@ export function perceive(world: World, c: Creature): Perception {
       }
     }
     if (o.speciesId === c.speciesId) {
+      // a fresh alarm about danger close to me (alarms do not chain endlessly)
+      if (o.state === 'flee' && d < sense * 0.8 && o.fearT >= 0 && world.time - o.fearT < 1.5) {
+        if (Math.hypot(o.fearX - c.x, o.fearY - c.y) < sense * 1.1) {
+          p.alarm++;
+          p.alarmX = o.fearX;
+          p.alarmY = o.fearY;
+        }
+      }
       if (d < sense * 0.65) {
         p.kin++;
         p.kinX += o.x;
@@ -218,12 +256,15 @@ export function perceive(world: World, c: Creature): Perception {
   }
 
   scanFood(world, c, sense, p);
+  p.foodPerHead = foodSeen / (1 + p.kin);
   return p;
 }
 
+let foodSeen = 0;
+
 function scanFood(world: World, c: Creature, sense: number, p: Perception): void {
+  foodSeen = 0;
   const room = maxEnergyOf(c) - c.energy;
-  if (room <= 1) return;
   const curiosity = c.ph.curiosity;
   // algae and fungi
   if (c.ph.herbEff > 0.08) {
@@ -232,6 +273,7 @@ function scanFood(world: World, c: Creature, sense: number, p: Perception): void
     for (const idx of buf) {
       const pr = world.pointProducers[idx];
       if (pr.biomass < 1) continue;
+      foodSeen += pr.biomass;
       const fy = pr.kind === 'fungus' ? pr.y - 6 : pr.y;
       const d = Math.hypot(pr.x - c.x, fy - c.y);
       // a nearly grazed-out colony is not worth a long swim
@@ -242,14 +284,16 @@ function scanFood(world: World, c: Creature, sense: number, p: Perception): void
     }
     // plants (tall: scan by x)
     for (const pl of world.plants) {
-      if (pl.biomass < 4) continue;
+      const edible = grazable(pl);
+      if (edible < 4) continue;
       const dx = pl.x - c.x;
       if (dx > sense || dx < -sense) continue;
+      foodSeen += edible;
       const top = pl.y - plantHeight(pl);
       const ty = Math.min(Math.max(c.y, top + 8), pl.y - 8);
       const d = Math.hypot(dx, ty - c.y);
       if (d > sense) continue;
-      const value = Math.min(pl.biomass * 0.5, room) * producerEfficiency(c, 'plant');
+      const value = Math.min(edible, room) * producerEfficiency(c, 'plant');
       const score = value / (d + 40);
       if (score > p.foodScore) setFood(p, 'producer', pl.id, pl.x, ty, score);
     }
@@ -269,9 +313,11 @@ function scanFood(world: World, c: Creature, sense: number, p: Perception): void
   // remains (carnivores and scavengers)
   if (c.ph.carnEff > 0.15) {
     for (const k of world.corpses) {
+      const fresh = freshness(k);
+      if (fresh < 0.15) continue;
       const d = Math.hypot(k.x - c.x, k.y - c.y);
       if (d > sense) continue;
-      const score = (Math.min(k.biomass, room) * c.ph.carnEff) / (d + 40);
+      const score = (Math.min(k.biomass, room) * c.ph.carnEff * fresh) / (d + 40);
       if (score > p.foodScore) setFood(p, 'corpse', k.id, k.x, k.y, score);
     }
   }

@@ -4,19 +4,23 @@ import { clamp, wrap01 } from './core/math';
 import { Rng } from './core/rng';
 import { SpatialGrid } from './core/spatialGrid';
 import type { Corpse } from './entities/corpse';
-import type { Creature } from './entities/creature';
 import type { Food } from './entities/food';
 import { plantHeight, type Producer, type Seed } from './entities/producer';
 import { Environment } from './environment';
 import { G, genomeFromTemplate, type Genome } from './genome';
 import { familyName, speciesName, worldName } from './names';
 import { N_RARE, RARE_DEFS } from './rareTraits';
+import type { Creature, DeathCause } from './entities/creature';
+import type { SimEvent } from './events';
+import { History } from './history/history';
 import type { FamilyRecord, SpeciesRecord } from './registry';
 import { createCreature, createProducer } from './spawn';
 import { generateTerrain, groundY, type Terrain } from './terrain';
 import { updateCreatures } from './systems/creatures';
+import { bankGenome, emptyEcology, updateEcology, type EcologyState } from './systems/ecology';
 import { updateItems } from './systems/items';
 import { updateProducers } from './systems/producers';
+import { updateSpecies } from './systems/species';
 
 export const WORLD_HEIGHT = 1000;
 /** Fixed simulation step (seconds of simulated time). */
@@ -110,6 +114,15 @@ export class World {
 
   ledger: Ledger = { heat: 0, inflow: 0, feed: 0 };
   counters: WorldCounters = { births: 0, deaths: 0, generationsMax: 0 };
+  ecology: EcologyState = emptyEcology();
+  /** Facts produced during the current step (consumed by the history layer). */
+  events: SimEvent[] = [];
+  /** Living, non-egg predators / consumers (refreshed every step). */
+  predatorCount = 0;
+  consumerCount = 0;
+  speciesTimer = 0;
+  ecologyTimer = 0;
+  history: History;
 
   /** Producers that live at a point (algae + fungi); plants are scanned linearly. */
   pointProducers: Producer[] = [];
@@ -119,7 +132,7 @@ export class World {
   fgrid: SpatialGrid;
 
   fx: FxEvent[] = [];
-  private slowAcc = 0;
+  slowAcc = 0;
 
   constructor(opts: WorldOptions, restore = false) {
     this.seed = opts.seed;
@@ -128,11 +141,14 @@ export class World {
     this.width = worldWidthForAspect(opts.aspect ?? 16 / 9);
     this.height = WORLD_HEIGHT;
     this.createdAt = opts.createdAt ?? Date.now();
+    // plants line the floor, so a wider tank holds more of them
+    if (opts.config?.maxPlants === undefined) this.cfg.maxPlants = Math.round(this.cfg.maxPlants * (this.width / 1778));
     const gen = this.rng.fork('terrain');
     this.terrain = generateTerrain(gen, this.width, this.height);
     this.name = opts.name ?? worldName(this.rng.fork('name'));
     const settings = { ...DEFAULT_SETTINGS, ...(opts.settings ?? {}) };
     this.env = new Environment(this.width, this.height, this.terrain, this.cfg, settings, this.rng.fork('env'));
+    this.history = new History(this);
     this.cgrid = new SpatialGrid(this.width, this.height, 80);
     this.pgrid = new SpatialGrid(this.width, this.height, 80);
     this.fgrid = new SpatialGrid(this.width, this.height, 80);
@@ -206,6 +222,7 @@ export class World {
     for (const c of this.creatures) s += c.energy + c.structure;
     for (const f of this.foods) s += f.energy;
     for (const c of this.corpses) s += c.biomass;
+    for (const sd of this.seeds) s += sd.energy;
     return s;
   }
 
@@ -215,6 +232,7 @@ export class World {
     for (const c of this.creatures) s += c.energy + c.structure;
     for (const f of this.foods) s += f.energy;
     for (const c of this.corpses) s += c.biomass;
+    for (const sd of this.seeds) s += sd.energy;
     return s;
   }
 
@@ -224,6 +242,7 @@ export class World {
   }
 
   step(dt: number): void {
+    this.events.length = 0;
     this.time += dt;
     this.tick++;
     this.env.update(dt);
@@ -236,14 +255,126 @@ export class World {
       updateProducers(this, SLOW_DT);
       const deficit = this.matterTarget() - this.totalMatter();
       const inflow = deficit * Math.min(1, this.cfg.nutrientRelax * SLOW_DT);
-      this.ledger.inflow += inflow;
-      this.env.updateGrid(SLOW_DT, inflow);
+      this.ledger.inflow += this.env.updateGrid(SLOW_DT, inflow);
     }
+    this.ecologyTimer += dt;
+    if (this.ecologyTimer >= 1) {
+      this.ecologyTimer -= 1;
+      updateEcology(this);
+    }
+    this.speciesTimer += dt;
+    if (this.speciesTimer >= 120) {
+      this.speciesTimer -= 120;
+      updateSpecies(this);
+    }
+    this.history.process();
     this.compact();
+  }
+
+  /** A creature hatched (or was revived): update registries and announce it. */
+  recordBirth(c: Creature): void {
+    this.counters.births++;
+    if (c.generation > this.counters.generationsMax) this.counters.generationsMax = c.generation;
+    const sp = this.species.get(c.speciesId);
+    if (sp) {
+      sp.population++;
+      sp.totalBorn++;
+      if (sp.population > sp.peak) sp.peak = sp.population;
+      sp.extinctAt = null;
+    }
+    // a notable new mutation may found a new family line
+    let newFamily = false;
+    const notable = c.mutations.length > 0;
+    if (notable && c.parentA !== 0 && this.rng.next() < (c.mutations.some((m) => m >= 100) ? 0.6 : 0.35)) {
+      newFamily = true;
+      this.families.set(c.id, {
+        id: c.id,
+        name: familyName(this.rng),
+        founderId: c.id,
+        founderName: c.name,
+        founderGen: c.generation,
+        foundedAt: this.time,
+        speciesId: c.speciesId,
+        hue: c.genome.g[G.hue],
+        living: 0,
+        maxGen: c.generation,
+        totalMembers: 0,
+        extinctAt: null,
+        milestones: [],
+      });
+      c.familyId = c.id;
+    }
+    const fam = this.families.get(c.familyId);
+    if (fam) {
+      fam.living++;
+      fam.totalMembers++;
+      if (c.generation > fam.maxGen) fam.maxGen = c.generation;
+      fam.extinctAt = null;
+    }
+    this.events.push({
+      t: 'birth',
+      id: c.id,
+      parentA: c.parentA,
+      parentB: c.parentB,
+      generation: c.generation,
+      species: c.speciesId,
+      family: c.familyId,
+      mutations: c.mutations,
+      rareMask: c.ph.rare.mask,
+      newFamily,
+      x: c.x,
+      y: c.y,
+    });
+  }
+
+  /** A creature died: update registries, bank its genes, announce it. */
+  recordDeath(c: Creature, cause: DeathCause, killer: number): void {
+    if (c.stage === 'egg') return;
+    this.counters.deaths++;
+    const sp = this.species.get(c.speciesId);
+    if (sp) {
+      sp.population = Math.max(0, sp.population - 1);
+      if (sp.population === 0 && !this.creatures.some((o) => o !== c && o.speciesId === c.speciesId && o.dying === 0)) {
+        sp.extinctAt = this.time;
+        this.events.push({ t: 'speciesExtinct', species: sp.id, lastId: c.id });
+      }
+    }
+    const fam = this.families.get(c.familyId);
+    if (fam) {
+      fam.living = Math.max(0, fam.living - 1);
+      if (fam.living === 0) {
+        fam.extinctAt = this.time;
+        this.events.push({ t: 'familyExtinct', family: fam.id });
+      }
+    }
+    if (c.stage === 'adult' || c.stage === 'elder') bankGenome(this, c.genome, c.speciesId, c.generation, c.ph.trophic === 'carnivore');
+    this.events.push({
+      t: 'death',
+      id: c.id,
+      cause,
+      age: c.age,
+      species: c.speciesId,
+      family: c.familyId,
+      generation: c.generation,
+      killer,
+      children: c.children,
+      rareMask: c.ph.rare.mask,
+      x: c.x,
+      y: c.y,
+    });
   }
 
   rebuildGrids(): void {
     this.cgrid.build(this.creatures);
+    let pred = 0;
+    let cons = 0;
+    for (const c of this.creatures) {
+      if (c.dying > 0 || c.stage === 'egg') continue;
+      if (c.ph.trophic === 'carnivore') pred++;
+      else cons++;
+    }
+    this.predatorCount = pred;
+    this.consumerCount = cons;
     this.pointProducers.length = 0;
     this.plants.length = 0;
     for (const p of this.producers) {
@@ -268,6 +399,7 @@ export class World {
     w = 0;
     for (const p of this.producers) {
       if (p.biomass <= 0.05) {
+        if (p.biomass > 0) this.env.addDetritus(p.x, p.kind === 'plant' ? p.y - 8 : p.y, p.biomass);
         this.producerMap.delete(p.id);
         continue;
       }
@@ -277,6 +409,7 @@ export class World {
     w = 0;
     for (const f of this.foods) {
       if (f.energy <= 0.01) {
+        if (f.energy > 0) this.env.addNutrient(f.x, f.y, f.energy);
         this.foodMap.delete(f.id);
         continue;
       }
@@ -286,6 +419,7 @@ export class World {
     w = 0;
     for (const c of this.corpses) {
       if (c.biomass <= 0.05) {
+        if (c.biomass > 0) this.env.addDetritus(c.x, c.y, c.biomass);
         this.corpseMap.delete(c.id);
         continue;
       }
@@ -327,10 +461,10 @@ export class World {
 
   private populateProducers(rng: Rng): void {
     const cfg = this.cfg;
-    const patches = 8 + rng.int(4);
+    const patches = 9 + rng.int(4);
     for (let p = 0; p < patches; p++) {
       const cx = rng.range(60, this.width - 60);
-      const n = 5 + rng.int(4);
+      const n = 6 + rng.int(4);
       const hue = rng.range(-0.04, 0.05);
       for (let i = 0; i < n; i++) {
         const x = clamp(cx + rng.normal() * 55, 10, this.width - 10);
@@ -397,7 +531,7 @@ export class World {
       foundedAt: this.time,
       parentSpecies: 0,
       centroid,
-      population: 0,
+      population: arch.count,
       peak: arch.count,
       totalBorn: arch.count,
       extinctAt: null,
@@ -421,8 +555,9 @@ export class World {
         age: 0,
         energyFraction: 0.7,
       });
-      // founders arrive at a range of ages so the first generation does not die all at once
-      c.age = c.ph.maturityAge * rng.range(0.6, 1.6);
+      // founders arrive at a range of ages so the first generation does not die all at once;
+      // the hunters arrive young
+      c.age = c.ph.maturityAge * (predator ? rng.range(0.9, 1.15) : rng.range(0.6, 1.6));
       c.bornT = this.time - c.age;
       c.growth = Math.min(1, 0.45 + 0.55 * Math.pow(Math.min(1, c.age / c.ph.maturityAge), 0.7));
       c.structure = c.ph.adultStructure * c.growth * c.growth;

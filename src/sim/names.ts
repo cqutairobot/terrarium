@@ -93,7 +93,8 @@ export function speciesName(t: SpeciesNameTraits, taken: ReadonlySet<string>): s
     [t.armor, '甲'],
     [t.perception, '角'],
   ];
-  parts.sort((a, b) => b[0] - a[0]);
+  // name a kind after what makes it distinctive, not merely what is large
+  parts.sort((a, b) => Math.abs(b[0] - 0.45) - Math.abs(a[0] - 0.45));
   const color = colorChar(t.hue);
   const suffix = t.diet > 0.65 ? '掠食者' : t.diet > 0.35 ? '游者' : '族';
   const prefixes = t.size < 0.18 ? ['', '小'] : t.size > 0.6 && t.diet <= 0.65 ? ['', '大'] : [''];

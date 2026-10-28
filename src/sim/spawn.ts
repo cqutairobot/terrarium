@@ -40,7 +40,8 @@ export function createCreature(init: CreatureInit): Creature {
   const age = isEgg ? 0 : (init.age ?? 0);
   const growth = isEgg ? 0.45 : growthAt(age, ph.maturityAge);
   const massF = growth * growth;
-  const structure = ph.adultStructure * massF;
+  // an egg's whole substance is its energy pool; the body is built at hatching
+  const structure = isEgg ? 0 : ph.adultStructure * massF;
   const energy = isEgg ? (init.eggEnergy ?? 0) : ph.maxEnergy * massF * (init.energyFraction ?? 0.7);
   const heading = rng.next() * Math.PI * 2;
   const c: Creature = {
@@ -99,8 +100,10 @@ export function createCreature(init: CreatureInit): Creature {
     reproCooldown: isEgg ? 0 : ph.reproCooldown * rng.next(),
     partnerId: 0,
     danceT: 0,
+    courtLead: false,
     attackCooldown: 0,
     lastAttacker: 0,
+    lastHurt: 'injury',
     glowT: 0,
     stardust: 0,
     munch: 0,

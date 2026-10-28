@@ -18,6 +18,7 @@ const world = new World({ seed, aspect });
 const total = hours * 3600;
 const reportEvery = reportMin * 60;
 let nextReport = 0;
+const tally: Record<string, number> = {};
 const t0 = performance.now();
 const startMatter = world.totalMatter();
 
@@ -27,10 +28,14 @@ function pad(v: string | number, n: number): string {
 
 console.log(`world "${world.name}" seed=${seed} size=${world.width}x${world.height} hours=${hours}`);
 console.log(
-  ['  t(min)', 'cons', 'pred', 'eggs', 'plants', 'algae', 'fungi', 'nutr', 'detr', 'matter', 'temp', 'light', 'maxGen', 'births', 'deaths'].join(' '),
+  ['  t(min)', 'cons', 'pred', 'eggs', 'plants', 'algae', 'fungi', 'nutr', 'detr', 'matter', 'temp', 'light', 'maxGen', 'births', 'deaths', 'kills', 'starve', 'age', 'species', 'resp'].join(' '),
 );
 while (world.time < total) {
   world.step(SIM_DT);
+  for (const e of world.events) {
+    if (e.t === 'death') tally[e.cause] = (tally[e.cause] ?? 0) + 1;
+    else if (e.t === 'respawn') tally.respawn = (tally.respawn ?? 0) + 1;
+  }
   if (world.time >= nextReport) {
     nextReport += reportEvery;
     const k = world.counts();
@@ -53,6 +58,11 @@ while (world.time < total) {
         pad(maxGen, 6),
         pad(world.counters.births, 6),
         pad(world.counters.deaths, 6),
+        pad(tally.predation ?? 0, 5),
+        pad(tally.starvation ?? 0, 6),
+        pad(tally.age ?? 0, 4),
+        pad([...world.species.values()].filter((s) => s.extinctAt === null).length, 7),
+        pad(tally.respawn ?? 0, 4),
       ].join(' '),
     );
   }

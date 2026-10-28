@@ -77,6 +77,8 @@ export class Environment {
   dayPhase = 0;
   daylight = 1;
   light = 1;
+  /** Slow average of surface light: rooted plants store the day's light and grow on through the night. */
+  lightAvg = 0.7;
   temperature = 0.5;
   turbulence = 0;
   flowAmp = 2.6;
@@ -169,6 +171,11 @@ export class Environment {
     return this.light * Math.exp((-this.cfg.lightAttenuation * clamp(y, 0, this.height)) / this.height);
   }
 
+  /** Day-averaged light at depth (what a rooted plant effectively lives on). */
+  storedLightAt(y: number): number {
+    return this.lightAvg * Math.exp((-this.cfg.lightAttenuation * clamp(y, 0, this.height)) / this.height);
+  }
+
   /** Q10-style metabolic temperature factor (1 at 0.5). */
   q10(): number {
     return Math.pow(2, (this.temperature - 0.5) * 1.6);
@@ -256,15 +263,17 @@ export class Environment {
 
     this.dayPhase = wrap01(this.time / this.cfg.dayLength + 0.06);
     const sun = Math.sin(TAU * this.dayPhase);
-    this.daylight = smoothstep(-0.2, 0.35, sun);
-    this.light = this.lightSet * (0.14 + 0.86 * this.daylight) * this.lightWeather;
+    this.daylight = smoothstep(-0.38, 0.22, sun);
+    this.light = this.lightSet * (0.25 + 0.75 * this.daylight) * this.lightWeather;
+    this.lightAvg += (this.light - this.lightAvg) * (1 - Math.exp(-dt / 420));
     const season = Math.sin(TAU * (this.time / this.cfg.seasonLength + this.seasonPhase));
     this.temperature = clamp01(this.tempSet + 0.07 * season + 0.025 * (this.daylight - 0.5) + this.tempWeather);
     this.flowAmp = 2.6 * (1 + 2.2 * this.turbulence);
   }
 
   /** Diffusion, sinking, mixing and decomposition on the nutrient grid. */
-  updateGrid(dt: number, inflow: number): void {
+  /** Returns the matter actually exchanged with the sediment. */
+  updateGrid(dt: number, inflow: number): number {
     const { cols, rows, nutrient, detritus, water, cfg } = this;
     const q = this.q10();
     // decomposition: detritus → nutrients, faster where fungus grows
@@ -310,28 +319,31 @@ export class Environment {
     }
     this.nutrient = next;
     // slow exchange with the sediment keeps total matter near the richness target
-    if (inflow !== 0) this.applyInflow(inflow);
+    return inflow !== 0 ? this.applyInflow(inflow) : 0;
   }
 
-  private applyInflow(amount: number): void {
+  private applyInflow(amount: number): number {
     const { cols, nutrient, detritus } = this;
     if (amount > 0) {
       const per = amount / cols;
       for (let cx = 0; cx < cols; cx++) nutrient[this.bottomRow[cx] * cols + cx] += per;
-    } else {
-      let pool = 0;
-      for (let cx = 0; cx < cols; cx++) {
-        const i = this.bottomRow[cx] * cols + cx;
-        pool += nutrient[i] + detritus[i];
-      }
-      if (pool <= 0) return;
-      const f = Math.min(1, -amount / pool);
-      for (let cx = 0; cx < cols; cx++) {
-        const i = this.bottomRow[cx] * cols + cx;
-        nutrient[i] *= 1 - f;
-        detritus[i] *= 1 - f;
-      }
+      return amount;
     }
+    let pool = 0;
+    for (let cx = 0; cx < cols; cx++) {
+      const i = this.bottomRow[cx] * cols + cx;
+      pool += nutrient[i] + detritus[i];
+    }
+    if (pool <= 0) return 0;
+    const f = Math.min(1, -amount / pool);
+    let removed = 0;
+    for (let cx = 0; cx < cols; cx++) {
+      const i = this.bottomRow[cx] * cols + cx;
+      removed += (nutrient[i] + detritus[i]) * f;
+      nutrient[i] *= 1 - f;
+      detritus[i] *= 1 - f;
+    }
+    return -removed;
   }
 
   totalNutrient(): number {

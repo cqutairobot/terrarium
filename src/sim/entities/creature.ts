@@ -118,8 +118,12 @@ export interface Creature {
   /** Partner during courtship or a social greeting. */
   partnerId: number;
   danceT: number;
+  /** True for the partner who leads a courtship (and lays the eggs). */
+  courtLead: boolean;
   attackCooldown: number;
   lastAttacker: number;
+  /** What last hurt this creature (becomes the death cause). */
+  lastHurt: DeathCause;
 
   // states from the environment
   glowT: number;

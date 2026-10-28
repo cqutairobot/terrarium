@@ -1,6 +1,7 @@
 import { bodyRadius, foodEfficiency, maxEnergyOf, producerEfficiency } from '../behavior/perception';
+import { freshness } from '../entities/corpse';
 import type { Creature } from '../entities/creature';
-import { plantHeight } from '../entities/producer';
+import { grazable, plantHeight } from '../entities/producer';
 import type { World } from '../world';
 
 const FOOD_REACH_PAD = 6;
@@ -11,7 +12,7 @@ function targetGap(world: World, c: Creature): number {
   switch (c.targetKind) {
     case 'producer': {
       const p = world.producerMap.get(c.targetId);
-      if (!p || p.biomass < 0.5) return -1;
+      if (!p || grazable(p) < 0.5) return -1;
       if (p.kind === 'plant') {
         const top = p.y - plantHeight(p);
         const dx = Math.abs(c.x - p.x);
@@ -77,13 +78,13 @@ function bite(world: World, c: Creature, dt: number): void {
     if (!p) return;
     eff = producerEfficiency(c, p.kind);
     want = Math.min(want, room / Math.max(0.05, eff));
-    got = Math.min(want, p.biomass);
+    got = Math.min(want, grazable(p));
     p.biomass -= got;
     p.grazed = 0;
     if (p.stardust > 0) c.stardust = Math.min(1, c.stardust + got * p.stardust * 0.02);
     if (p.kind === 'fungus') c.glowT = Math.max(c.glowT, 6);
     hue = p.kind === 'fungus' ? 0.5 : 0.3 + p.hue;
-    if (p.biomass < 0.5) c.thinkTimer = 0;
+    if (grazable(p) < 0.5) c.thinkTimer = 0;
   } else if (c.targetKind === 'food') {
     const f = world.foodMap.get(c.targetId);
     if (!f) return;
@@ -98,7 +99,7 @@ function bite(world: World, c: Creature, dt: number): void {
   } else if (c.targetKind === 'corpse') {
     const k = world.corpseMap.get(c.targetId);
     if (!k) return;
-    eff = c.ph.carnEff;
+    eff = c.ph.carnEff * Math.max(0.1, freshness(k));
     want = Math.min(want * 1.3, room / Math.max(0.05, eff));
     got = Math.min(want, k.biomass);
     k.biomass -= got;

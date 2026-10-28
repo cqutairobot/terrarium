@@ -37,6 +37,13 @@ export interface Seed {
   energy: number;
 }
 
+/** Rooted plants keep a share of their biomass that grazers cannot reach. */
+export const PLANT_RESERVE = 0.12;
+
+export function grazable(p: { kind: string; biomass: number; maxBiomass: number }): number {
+  return p.kind === 'plant' ? Math.max(0, p.biomass - p.maxBiomass * PLANT_RESERVE) : p.biomass;
+}
+
 /** Height of a plant in world units for a given biomass. */
 export function plantHeight(p: { biomass: number; maxBiomass: number; variant: number }): number {
   const f = Math.sqrt(Math.max(0, p.biomass) / p.maxBiomass);

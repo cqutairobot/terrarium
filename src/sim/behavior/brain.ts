@@ -2,14 +2,15 @@ import { TAU } from '../core/math';
 import type { BehaviorState, Creature } from '../entities/creature';
 import { plantHeight } from '../entities/producer';
 import type { World } from '../world';
-import { findRestSpot, maxEnergyOf, perceive, type Perception } from './perception';
+import { breedingPressure } from '../systems/reproduction';
+import { canBreed, findRestSpot, maxEnergyOf, perceive, type Perception } from './perception';
 
 /**
  * Utility AI: every think, each possible intention gets a score shaped by
  * genes, body state and what the creature currently perceives. The best
  * score wins, with a small bonus for the current state to avoid dithering.
  */
-const CANDIDATES: BehaviorState[] = ['flee', 'forage', 'rest', 'social', 'explore', 'wander', 'follow'];
+const CANDIDATES: BehaviorState[] = ['flee', 'hunt', 'forage', 'seekMate', 'rest', 'social', 'explore', 'wander', 'follow'];
 const scores: Record<string, number> = {};
 
 export function think(world: World, c: Creature): void {
@@ -29,6 +30,11 @@ export function think(world: World, c: Creature): void {
     c.fearX = p.threat.x;
     c.fearY = p.threat.y;
     c.fearT = world.time;
+  } else if (p.alarm > 0 && c.state !== 'flee') {
+    // many eyes: a fleeing neighbour is warning enough (the fear keeps its original time)
+    c.fearX = p.alarmX;
+    c.fearY = p.alarmY;
+    c.fearT = world.time - 1;
   }
 
   const ph = c.ph;
@@ -41,16 +47,44 @@ export function think(world: World, c: Creature): void {
   const memFresh = c.memFoodT >= 0 && world.time - c.memFoodT < 70;
   const herbivorous = ph.herbEff > 0.2;
 
-  scores.flee = p.threat ? p.threatLevel * (0.6 + 0.9 * ph.timidity) * 1.5 : 0;
-  scores.forage = herbivorous || p.foodKind !== 'none'
-    ? Math.pow(hunger, 1.3) * 1.25 * (p.foodKind !== 'none' ? 1.15 : memFresh ? 0.95 : 0.7)
+  const threat = p.threat ? p.threatLevel : p.alarm > 0 ? 0.25 + 0.08 * Math.min(3, p.alarm) : 0;
+  scores.flee = threat * (0.5 + 0.8 * ph.timidity) * 1.3;
+  const carnivorous = ph.diet > 0.55;
+  // hunters only go out when properly hungry, then digest in peace
+  scores.hunt = carnivorous && hunger > 0.3
+    ? Math.pow(hunger, 1.1) * 1.5 * (p.prey ? 1.25 : 0.5) * (c.stamina > 0.3 ? 1 : 0.4)
     : 0;
-  scores.rest = (c.fatigue * (0.5 + 0.8 * (1 - ph.activity)) + sleepy * 0.55) * (1 - hunger * 0.7);
+  // a hunter with a meal in front of it finishes the meal
+  if (c.state === 'eat' || (carnivorous && p.foodKind === 'corpse')) scores.hunt *= 0.3;
+  const eFrac = c.energy / maxE;
+  const ready = canBreed(c);
+  const mate = ready ? (p.mate ?? distantMate(world, c)) : null;
+  scores.seekMate = ready
+    ? (eFrac - ph.reproThreshold + 0.3) *
+      1.3 *
+      (1 / (1 + Math.max(0, p.kin - 6) * 0.12)) *
+      breedingPressure(world, c) *
+      (mate ? 1.2 : 0.7) *
+      // only breed when the neighbourhood can feed the young
+      (carnivorous ? 1 : 0.25 + 0.75 * Math.min(1, p.foodPerHead / 40)) *
+      // photoperiod: breed when one's own active hours are at hand
+      (0.3 + 0.7 * (1 - sleepy))
+    : 0;
+  // searching blindly in one's sleeping hours is a poor bargain: better to save energy
+  const foodKnown = p.foodKind !== 'none' || memFresh;
+  const blindSearch = 0.9 * (1 - 0.7 * sleepy);
+  scores.forage = herbivorous || p.foodKind !== 'none'
+    ? Math.pow(hunger, 1.3) * 1.25 * (p.foodKind !== 'none' ? 1.15 : memFresh ? 0.95 : blindSearch)
+    : 0;
+  scores.rest =
+    (c.fatigue * (0.5 + 0.8 * (1 - ph.activity)) + sleepy * 0.55 + (carnivorous && !ready ? (1 - hunger) * 0.35 : 0)) *
+      (1 - hunger * 0.7) +
+    (foodKnown ? 0 : sleepy * 0.3);
   scores.social =
     p.social && world.time - c.lastSocial > 25 ? ph.sociability * 0.45 * (1 - hunger) : 0;
   const boredom = c.state === 'wander' ? Math.min(0.25, c.stateTime / 120) : 0;
   scores.explore = ph.curiosity * 0.4 * (1 - hunger) + boredom;
-  scores.wander = 0.22 + 0.1 * ph.activity;
+  scores.wander = (0.22 + 0.1 * ph.activity) * (1 - 0.8 * hunger);
   scores.follow =
     c.stage === 'juvenile' && p.parent ? 0.7 * (1 - c.age / ph.maturityAge) * (1 - hunger * 0.5) : 0;
 
@@ -59,6 +93,8 @@ export function think(world: World, c: Creature): void {
   for (const s of CANDIDATES) {
     let v = scores[s] + rng.next() * 0.06;
     if (s === c.state) v += 0.12;
+    // finishing a meal feels good: eaters keep eating until nearly full
+    if (s === 'forage' && c.state === 'eat' && hunger > 0.08) v += 0.25;
     if (v > bestScore) {
       bestScore = v;
       best = s;
@@ -66,7 +102,7 @@ export function think(world: World, c: Creature): void {
   }
   // resting has a minimum duration unless danger appears
   if (c.state === 'rest' && c.stateTime < 4 && best !== 'flee' && hunger < 0.8) best = 'rest';
-  applyChoice(world, c, best, p);
+  applyChoice(world, c, best, p, mate);
 }
 
 function setState(c: Creature, s: BehaviorState): void {
@@ -76,7 +112,7 @@ function setState(c: Creature, s: BehaviorState): void {
   }
 }
 
-function applyChoice(world: World, c: Creature, s: BehaviorState, p: Perception): void {
+function applyChoice(world: World, c: Creature, s: BehaviorState, p: Perception, mate: Creature | null): void {
   const rng = world.rng;
   switch (s) {
     case 'flee': {
@@ -85,6 +121,42 @@ function applyChoice(world: World, c: Creature, s: BehaviorState, p: Perception)
       c.targetId = p.threat ? p.threat.id : 0;
       c.threatId = c.targetId;
       c.thinkTimer = Math.min(c.thinkTimer, 0.2);
+      return;
+    }
+    case 'hunt': {
+      setState(c, 'hunt');
+      if (p.prey) {
+        c.targetKind = 'creature';
+        c.targetId = p.prey.id;
+        c.memFoodX = p.prey.x;
+        c.memFoodY = p.prey.y;
+        c.memFoodT = world.time;
+      } else if (c.targetKind !== 'point' || Math.hypot(c.tx - c.x, c.ty - c.y) < 40) {
+        // patrol: back to where prey was last seen, or a slow cruise
+        c.targetKind = 'point';
+        c.targetId = 0;
+        if (c.memFoodT >= 0 && world.time - c.memFoodT < 90 && Math.hypot(c.memFoodX - c.x, c.memFoodY - c.y) > 60) {
+          c.tx = c.memFoodX;
+          c.ty = c.memFoodY;
+        } else pickSearchPoint(world, c);
+      }
+      return;
+    }
+    case 'seekMate': {
+      setState(c, 'seekMate');
+      if (mate) {
+        c.targetKind = 'creature';
+        c.targetId = mate.id;
+      } else if (c.targetKind !== 'point' || Math.hypot(c.tx - c.x, c.ty - c.y) < 40) {
+        c.targetKind = 'point';
+        c.targetId = 0;
+        // look for company: drift toward kin if any were seen
+        if (p.kin > 0) {
+          c.tx = p.kinX;
+          c.ty = p.kinY;
+        } else pickSearchPoint(world, c);
+      }
+      if (c.stateTime > 20) c.reproCooldown = Math.max(c.reproCooldown, 8);
       return;
     }
     case 'forage': {
@@ -173,6 +245,27 @@ function applyChoice(world: World, c: Creature, s: BehaviorState, p: Perception)
   setState(c, 'wander');
   c.targetKind = 'none';
   c.targetId = 0;
+}
+
+/**
+ * Rare kinds call to each other across the whole tank (think whale song or
+ * pheromones): when its species is small, a breeder finds the nearest ready
+ * partner even beyond sight.
+ */
+function distantMate(world: World, c: Creature): Creature | null {
+  const sp = world.species.get(c.speciesId);
+  if (!sp || sp.population > 8) return null;
+  let best: Creature | null = null;
+  let bd = Infinity;
+  for (const o of world.creatures) {
+    if (o === c || o.speciesId !== c.speciesId || !canBreed(o)) continue;
+    const d = Math.hypot(o.x - c.x, o.y - c.y);
+    if (d < bd) {
+      bd = d;
+      best = o;
+    }
+  }
+  return best;
 }
 
 function pickSearchPoint(world: World, c: Creature): void {

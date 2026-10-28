@@ -49,11 +49,22 @@ export function updateProducers(world: World, dt: number): void {
       const loss = Math.min(p.biomass, p.biomass * 0.02 * dt + 0.05 * dt);
       p.biomass -= loss;
       env.addDetritus(p.x, p.kind === 'plant' ? p.y - 8 : p.y, loss);
+      // an old stem dies back, but the roots usually send up a fresh shoot
+      if (p.kind === 'plant' && p.biomass <= 0.05 && env.temperature >= 0.08 && rng.chance(0.9)) {
+        const got = env.takeNutrient(p.x, p.y - 10, 4);
+        if (got > 0.5) {
+          const shoot = createProducer(world.newId(), 'plant', p.x + rng.range(-6, 6), p.y, rng, p.maxBiomass, 0, p.hue + rng.normal() * 0.01);
+          shoot.age = 0;
+          shoot.biomass = got;
+          shoot.variant = Math.min(1, Math.max(0, p.variant + rng.normal() * 0.04));
+          newborn.push(shoot);
+        }
+      }
       continue;
     }
     if (p.kind === 'plant') {
       const h = plantHeight(p);
-      const light = env.lightAt(p.y - h * 0.75);
+      const light = env.storedLightAt(p.y - h * 0.75);
       const n = env.nutrientAt(p.x, p.y - 10);
       const logistic = Math.max(2.5, p.biomass) * (1 - p.biomass / p.maxBiomass);
       const growth = cfg.plantGrowth * boost * light * monod(n, K) * tempF * logistic;
@@ -64,7 +75,22 @@ export function updateProducers(world: World, dt: number): void {
       p.seedTimer -= dt;
       if (p.seedTimer <= 0) {
         p.seedTimer = rng.range(40, 120);
-        if (
+        const rootFed = env.nutrientAt(p.x, p.y - 10) > 25;
+        if ((p.biomass > p.maxBiomass * 0.3 || rootFed) && plants + newborn.length + world.seeds.length < cfg.maxPlants && rng.chance(0.45)) {
+          // a runner: rhizomes send up a new shoot a little way along the floor,
+          // fed by the sediment when the leaves are grazed short
+          const nx = p.x + rng.sign() * rng.range(18, 55);
+          if (nx > 8 && nx < world.width - 8 && !world.plants.some((o) => Math.abs(o.x - nx) < 12)) {
+            const cost = 3;
+            const fromSoil = env.takeNutrient(p.x, p.y - 10, cost);
+            p.biomass -= cost - fromSoil;
+            const shoot = createProducer(world.newId(), 'plant', nx, world.groundAt(nx) + 3, rng, p.maxBiomass * rng.range(0.9, 1.1), 0, p.hue + rng.normal() * 0.01);
+            shoot.age = 0;
+            shoot.biomass = cost;
+            shoot.variant = Math.min(1, Math.max(0, p.variant + rng.normal() * 0.05));
+            newborn.push(shoot);
+          }
+        } else if (
           p.biomass > p.maxBiomass * 0.6 &&
           world.seeds.length < cfg.maxSeeds &&
           plants + world.seeds.length < cfg.maxPlants &&
@@ -131,7 +157,7 @@ export function updateProducers(world: World, dt: number): void {
   }
 
   // drifting algae spores keep the surface alive if algae ever vanish
-  if (algae < 4 && rng.chance(0.02 * dt)) {
+  if (algae < 20 && rng.chance(0.06 * dt)) {
     const x = rng.range(30, world.width - 30);
     const y = rng.range(40, 200);
     const got = env.takeNutrient(x, y, 2);

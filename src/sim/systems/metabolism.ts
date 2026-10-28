@@ -30,7 +30,8 @@ export function updateMetabolism(world: World, c: Creature, dt: number): void {
   // growth: the body follows an age schedule as long as there is energy to build it
   if (c.growth < 1) {
     const targetS = ph.adultStructure * Math.pow(growthAt(c.age, ph.maturityAge), 2);
-    if (c.structure < targetS && c.energy > maxEnergyOf(c) * 0.12) {
+    // growth pauses in lean times (stunting beats starving)
+    if (c.structure < targetS && c.energy > maxEnergyOf(c) * 0.4) {
       const build = Math.min(targetS - c.structure, ph.adultStructure * 0.02 * dt);
       const cost = build / cfg.growthEfficiency;
       if (cost < c.energy) {
@@ -49,7 +50,11 @@ export function updateMetabolism(world: World, c: Creature, dt: number): void {
   const stress = thermalStress(c, env.temperature);
   const crowd = c.stress;
   let basal = cfg.basalCoeff * ph.basalFactor * g * env.q10() * (1 + Math.min(2, stress)) * (1 + 0.3 * crowd);
-  if (c.state === 'rest') basal *= 0.6;
+  if (c.state === 'rest') {
+    // sleeping through one's quiet hours is cheapest
+    const offHours = (1 - env.daylight) * (1 - ph.nocturnality) + env.daylight * ph.nocturnality;
+    basal *= 0.5 - 0.15 * offHours;
+  }
   const move = cfg.moveCoeff * ph.moveCoeff * g * (speed / cfg.refSpeed) ** 2 * (1 + env.turbulence * 0.8);
   const spend = Math.min(c.energy, (basal + move + ph.upkeep + ph.senseCost) * dt);
   c.energy -= spend;
@@ -61,7 +66,8 @@ export function updateMetabolism(world: World, c: Creature, dt: number): void {
   const exertion = speed / Math.max(1, ph.maxSpeed);
   if (c.state === 'rest') c.fatigue = Math.max(0, c.fatigue - dt * 0.03);
   else c.fatigue = Math.min(1, c.fatigue + dt * (0.0012 + 0.006 * exertion * exertion));
-  if (c.state === 'flee' || c.state === 'hunt') c.stamina = Math.max(0, c.stamina - dt * 0.18);
-  else c.stamina = Math.min(1, c.stamina + dt * 0.05);
+  // stamina only burns while sprinting
+  if (exertion > 0.85) c.stamina = Math.max(0, c.stamina - dt * 0.16);
+  else c.stamina = Math.min(1, c.stamina + dt * (c.state === 'rest' ? 0.08 : 0.04));
   c.stress = Math.max(0, c.stress - dt * 0.05);
 }

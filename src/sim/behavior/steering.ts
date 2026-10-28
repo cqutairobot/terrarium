@@ -81,6 +81,43 @@ export function steer(world: World, c: Creature, dt: number): void {
       if (c.state === 'rest') frac *= 0.6 + 0.4 * arrive;
       break;
     }
+    case 'hunt':
+    case 'seekMate': {
+      const o = c.targetKind === 'creature' ? world.creatureMap.get(c.targetId) : undefined;
+      if (c.targetKind === 'creature' && (!o || o.dying > 0)) {
+        c.thinkTimer = 0;
+        break;
+      }
+      let tx = c.tx;
+      let ty = c.ty;
+      if (o) {
+        tx = o.x;
+        ty = o.y;
+        if (c.state === 'hunt') {
+          // lead the target
+          const d0 = Math.hypot(o.x - c.x, o.y - c.y);
+          const lead = Math.min(1.2, d0 / Math.max(20, ph.maxSpeed));
+          tx += o.vx * lead;
+          ty += o.vy * lead;
+        }
+        c.lookX = (o.x - c.x) / (Math.hypot(o.x - c.x, o.y - c.y) + 1e-6);
+        c.lookY = (o.y - c.y) / (Math.hypot(o.x - c.x, o.y - c.y) + 1e-6);
+      }
+      const dx = tx - c.x;
+      const dy = ty - c.y;
+      const d = Math.hypot(dx, dy) + 1e-6;
+      const arrive = o ? (c.state === 'hunt' ? 1 : Math.min(1, d / 40)) : Math.min(1, d / 60);
+      dvx = (dx / d) * arrive;
+      dvy = (dy / d) * arrive;
+      if (!o) frac *= c.state === 'hunt' ? 0.5 : 0.8;
+      else if (c.state === 'hunt') {
+        // stalk quietly, then strike from close range
+        const strike = 70 + r * 2;
+        frac = d > strike ? 0.38 : 1;
+      }
+      if (!o && d < 30) c.thinkTimer = 0;
+      break;
+    }
     case 'flee': {
       const t = world.creatureMap.get(c.targetId);
       const fx = t ? t.x : c.fearX;
@@ -95,7 +132,7 @@ export function steer(world: World, c: Creature, dt: number): void {
       if (c.y < 60 && dy < 0) dy = 0.3;
       dvx = dx;
       dvy = dy;
-      if (!t || d > 360) c.thinkTimer = 0;
+      if ((t && d > 360) || (!t && (d > 300 || world.time - c.fearT > 3))) c.thinkTimer = 0;
       break;
     }
     case 'social':
@@ -192,7 +229,8 @@ export function steer(world: World, c: Creature, dt: number): void {
   if (c.x > world.width - margin) wantVx -= ((c.x - (world.width - margin)) / margin) * speedCap * 0.8;
   if (c.y < margin) wantVy += ((margin - c.y) / margin) * speedCap * 0.8;
   const floorGap = floor - c.y;
-  const floorMargin = c.state === 'rest' || c.state === 'eat' ? 10 + r : 34 + r;
+  const lowTarget = c.state === 'forage' && c.targetKind !== 'point' && c.targetKind !== 'none';
+  const floorMargin = c.state === 'rest' || c.state === 'eat' || lowTarget ? 8 + r : 34 + r;
   if (floorGap < floorMargin) wantVy -= ((floorMargin - floorGap) / floorMargin) * speedCap * 0.9;
 
   integrate(world, c, wantVx, wantVy, speedCap, dt);

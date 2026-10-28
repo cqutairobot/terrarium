@@ -74,8 +74,8 @@ export function updateItems(world: World, dt: number): void {
     const floor = world.groundAt(s.x);
     if (s.y >= floor - 2) {
       s.y = floor - 2;
-      const crowded = world.plants.some((p) => Math.abs(p.x - s.x) < 26);
-      const fertile = env.nutrientAt(s.x, s.y - 10) > 1.5;
+      const crowded = world.plants.some((p) => Math.abs(p.x - s.x) < 16);
+      const fertile = env.nutrientAt(s.x, s.y - 10) > 0.5;
       if (!crowded && fertile && countKind(world, 'plant') < cfg.maxPlants) {
         const p = createProducer(world.newId(), 'plant', s.x, floor + 3, rng, cfg.plantMaxBiomass * rng.range(0.75, 1.2), 0, s.hue);
         p.age = 0;
