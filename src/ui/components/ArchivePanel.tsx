@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import type { Engine } from '../../engine/engine';
+import { REVIVE_PRICE, type Engine } from '../../engine/engine';
+import { cardLimit } from '../../game/economy';
 import { describeLife, displayName, RECORD_LABELS, type LifeStory } from '../../sim/history/stories';
 import { clockAt, formatAge, wallTime } from '../format';
 import { FamilyTree } from './FamilyTree';
@@ -7,7 +8,7 @@ import { Portrait } from './Portrait';
 import { Seg } from './StatsPanel';
 import { StoryTimeline } from './StoryTimeline';
 
-type Tab = 'living' | 'gone' | 'records';
+type Tab = 'living' | 'gone' | 'records' | 'cards';
 
 /** 生命档案馆: the lives you followed, and the ones the world itself remembers. */
 export function ArchivePanel({ engine, focus, setFocus }: { engine: Engine; focus: number | null; setFocus: (id: number | null) => void }) {
@@ -22,13 +23,13 @@ export function ArchivePanel({ engine, focus, setFocus }: { engine: Engine; focu
   if (story) return <StoryView engine={engine} s={story} back={() => setFocus(null)} />;
 
   const all = [...h.stories.values()];
-  const lists: Record<Tab, LifeStory[]> = {
+  const lists: Record<Exclude<Tab, 'cards'>, LifeStory[]> = {
     living: all.filter((s) => s.watched && s.diedT < 0).sort((a, b) => b.watchedT - a.watchedT),
     gone: all.filter((s) => s.watched && s.diedT >= 0).sort((a, b) => b.diedT - a.diedT),
     records: all.filter((s) => s.auto).sort((a, b) => b.watchedT - a.watchedT),
   };
-  const list = lists[tab];
-  const empty: Record<Tab, string> = {
+  const list = tab === 'cards' ? [] : lists[tab];
+  const empty: Record<Exclude<Tab, 'cards'>, string> = {
     living: '还没有关注任何生命。点选水中的小生命，按下 ☆ 关注它，它的一生就会被记在这里。',
     gone: '你关注过的生命都还在水中游动。',
     records: '世界还很年轻，还没有谁创下纪录。',
@@ -44,9 +45,11 @@ export function ArchivePanel({ engine, focus, setFocus }: { engine: Engine; focu
             ['living', `关注中 ${lists.living.length}`],
             ['gone', `已离去 ${lists.gone.length}`],
             ['records', `纪录 ${lists.records.length}`],
+            ['cards', `生命卡 ${engine.profile.geneCards.length}`],
           ]}
         />
       </div>
+      {tab === 'cards' && <Cards engine={engine} />}
       <div className="story-list">
         {list.map((s) => (
           <button key={s.id} className="story-row" onClick={() => setFocus(s.id)}>
@@ -70,8 +73,40 @@ export function ArchivePanel({ engine, focus, setFocus }: { engine: Engine; focu
             </span>
           </button>
         ))}
-        {list.length === 0 && <div className="muted small">{empty[tab]}</div>}
+        {tab !== 'cards' && list.length === 0 && <div className="muted small">{empty[tab]}</div>}
       </div>
+    </div>
+  );
+}
+
+/** Genes kept by the player: revive one as an egg in the shown tank. */
+function Cards({ engine }: { engine: Engine }) {
+  const p = engine.profile;
+  return (
+    <div className="story-list">
+      <div className="muted small">
+        生命卡存着一只生命的基因。复苏会在当前水缸里孕育一颗带着同样基因的卵（✦ {REVIVE_PRICE}，卵用的是缸里的养分）。共 {p.geneCards.length} / {cardLimit(p)} 张。
+      </div>
+      {p.geneCards.map((card) => (
+        <div key={card.id} className="story-row as-div">
+          <Portrait genome={card.genome} width={64} height={42} />
+          <span className="story-row-text">
+            <b>{card.name}</b>
+            <span className="muted small">
+              {card.species} · 第 {card.generation} 代 · 存于 {wallTime(card.savedAt)}
+            </span>
+          </span>
+          <span className="card-actions">
+            <button className="btn small" onClick={() => void engine.reviveCard(card.id)} disabled={p.lumen < REVIVE_PRICE || engine.busy}>
+              复苏
+            </button>
+            <button className="link quiet" onClick={() => engine.deleteCard(card.id)}>
+              丢弃
+            </button>
+          </span>
+        </div>
+      ))}
+      {p.geneCards.length === 0 && <div className="muted small">还没有生命卡。在观察卡上可以把喜欢的生命存成生命卡。</div>}
     </div>
   );
 }

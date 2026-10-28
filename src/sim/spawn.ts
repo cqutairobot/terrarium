@@ -99,6 +99,7 @@ export function createCreature(init: CreatureInit): Creature {
     lookY: Math.sin(heading),
     reproCooldown: isEgg ? 0 : ph.reproCooldown * rng.next(),
     partnerId: 0,
+    bondId: 0,
     danceT: 0,
     courtLead: false,
     attackCooldown: 0,

@@ -173,6 +173,18 @@ export const Icon = {
       <path d="M20 5v14" />
     </Svg>
   ),
+  requests: () => (
+    <Svg>
+      <path d="M6 4h9l3 3v13H6Z" />
+      <path d="M15 4v3h3M9 11h6M9 14.5h6M9 18h3.5" />
+    </Svg>
+  ),
+  shop: () => (
+    <Svg>
+      <path d="M12 3.5 14.2 9l5.3.7-4 3.6 1.1 5.4L12 16l-4.6 2.7 1.1-5.4-4-3.6L9.8 9Z" />
+      <path d="M12 8.5v5M9.5 11h5" />
+    </Svg>
+  ),
   plus: () => (
     <Svg size={16}>
       <path d="M12 5v14M5 12h14" />

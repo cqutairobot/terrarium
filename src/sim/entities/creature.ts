@@ -128,6 +128,8 @@ export interface Creature {
   reproCooldown: number;
   /** Partner during courtship or a social greeting. */
   partnerId: number;
+  /** Partner chosen by the player: the two court only each other (0 = free). */
+  bondId: number;
   danceT: number;
   /** True for the partner who leads a courtship (and lays the eggs). */
   courtLead: boolean;

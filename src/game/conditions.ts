@@ -60,6 +60,8 @@ export interface CreatureSpec {
   /** Rare traits it must show (codex keys). */
   rare?: string[];
   trophic?: Trophic;
+  /** Anything but a predator (the small life of the tank). */
+  grazer?: boolean;
   /** Only grown-ups count. */
   adult?: boolean;
   minGeneration?: number;
@@ -86,6 +88,7 @@ export function specChecks(c: Creature, spec: CreatureSpec): { label: string; ok
     for (const k of spec.rare) out.push({ label: `有${rareKeyLabel(k)}`, ok: keys.includes(k) });
   }
   if (spec.trophic) out.push({ label: TROPHIC_WORDS[spec.trophic], ok: c.ph.trophic === spec.trophic });
+  if (spec.grazer) out.push({ label: '不是掠食者', ok: c.ph.trophic !== 'carnivore' });
   if (spec.adult) out.push({ label: '已经成年', ok: c.stage === 'adult' || c.stage === 'elder' });
   if (spec.minGeneration !== undefined) out.push({ label: `第 ${spec.minGeneration} 代以后`, ok: c.generation >= spec.minGeneration });
   return out;
@@ -253,7 +256,7 @@ export function describeSpec(spec: CreatureSpec): string {
   for (const k of spec.rare ?? []) parts.push(`有${rareKeyLabel(k)}`);
   if (spec.trophic) parts.push(TROPHIC_WORDS[spec.trophic]);
   if (spec.minGeneration !== undefined) parts.push(`第 ${spec.minGeneration} 代以后`);
-  const who = `${spec.adult ? '成年' : ''}生命`;
+  const who = `${spec.adult ? '成年' : ''}${spec.grazer ? '小生命' : '生命'}`;
   return parts.length ? `${parts.join('、')}的${who}` : who;
 }
 

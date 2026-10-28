@@ -80,6 +80,8 @@ export interface WorldOptions {
   settings?: Partial<EnvSettings>;
   /** Wall clock at creation (ms); defaults to Date.now(). */
   createdAt?: number;
+  /** Plants and water only: no founding animals (a nursery waits for the player's creatures). */
+  lifeless?: boolean;
 }
 
 export function worldWidthForAspect(aspect: number): number {
@@ -161,7 +163,7 @@ export class World {
     this.cgrid = new SpatialGrid(this.width, this.height, 80);
     this.pgrid = new SpatialGrid(this.width, this.height, 80);
     this.fgrid = new SpatialGrid(this.width, this.height, 80);
-    if (!restore) this.populate();
+    if (!restore) this.populate(opts.lifeless ?? false);
   }
 
   newId(): number {
@@ -464,9 +466,10 @@ export class World {
 
   // ---------------------------------------------------------------- creation
 
-  private populate(): void {
+  private populate(lifeless: boolean): void {
     const rng = this.rng.fork('genesis');
     this.populateProducers(rng);
+    if (lifeless) return;
     const consumerA = rng.int(CONSUMER_ARCHETYPES.length);
     let consumerB = rng.int(CONSUMER_ARCHETYPES.length - 1);
     if (consumerB >= consumerA) consumerB++;

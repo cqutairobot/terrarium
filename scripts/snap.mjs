@@ -168,6 +168,101 @@ try {
       }, id);
       console.log(`[${size}] watched story: ${JSON.stringify(story)}`);
     }
+    if (scenario === 'breeding') {
+      // step 2: tutorial, pairing with a forecast, shop, nursery, gene cards, requests and delivery
+      const shot = async (name) => {
+        await page.waitForTimeout(600);
+        await page.screenshot({ path: `${out}/${size}-${name}.png` });
+      };
+      await shot('tutorial');
+      const tut0 = await page.evaluate(() => window.__eden.profile.tutorial.step);
+      await page.mouse.click(w * 0.5, h * 0.45);
+      await page.waitForTimeout(800);
+      const tut1 = await page.evaluate(() => window.__eden.profile.tutorial.step);
+      console.log(`[${size}] tutorial step ${tut0} -> after next/feed ${tut1}`);
+      const pair = await page.evaluate(() => {
+        const e = window.__eden;
+        const adults = e.world.creatures.filter((c) => c.stage === 'adult' && c.dying === 0 && c.ph.trophic !== 'carnivore');
+        const a = adults[0];
+        const b = adults.find((c) => c.speciesId === a.speciesId && c !== a) ?? adults[1];
+        e.select(a.id);
+        e.startPairing(a.id);
+        e.choosePartner(b.id);
+        return { a: a.id, b: b.id };
+      });
+      await shot('pair-offer');
+      await page.getByRole('button', { name: '结为伴侣' }).click();
+      await page.waitForTimeout(500);
+      const bonded = await page.evaluate(({ a, b }) => {
+        const e = window.__eden;
+        return e.world.creatureMap.get(a).bondId === b && e.world.creatureMap.get(b).bondId === a;
+      }, pair);
+      console.log(`[${size}] bonded: ${bonded}`);
+      // some lumen to spend
+      await page.evaluate(() => {
+        const e = window.__eden;
+        e.earn(600, '测试用的灵光');
+      });
+      await page.mouse.move(w / 2, h - 12);
+      await page.waitForTimeout(900);
+      await page.getByRole('button', { name: '灵光商店' }).click();
+      await shot('shop');
+      await page.locator('.shop-item', { hasText: '基因透镜' }).getByRole('button').click();
+      await page.waitForTimeout(400);
+      await page.locator('.shop-item', { hasText: '育种缸' }).getByRole('button').click();
+      await page.waitForTimeout(1200);
+      await page.locator('.shop-item', { hasText: '一群漂浮的触须精灵' }).getByRole('button').click();
+      await page.waitForTimeout(800);
+      const afterShop = await page.evaluate(() => {
+        const e = window.__eden;
+        return { lumen: e.profile.lumen, unlocks: e.profile.unlocks, tanks: e.profile.tanks.map((t) => t.kind), creatures: e.world.creatures.length };
+      });
+      console.log(`[${size}] after shop: ${JSON.stringify(afterShop)}`);
+      // the forecast now shows rare chances
+      await page.evaluate(({ a, b }) => {
+        const e = window.__eden;
+        e.startPairing(a);
+        e.choosePartner(b);
+      }, pair);
+      await shot('pair-offer-lens');
+      await page.getByRole('button', { name: '算了' }).click();
+      // a gene card, revived as an egg
+      const card = await page.evaluate(async ({ a }) => {
+        const e = window.__eden;
+        e.saveCard(a);
+        const id = e.profile.geneCards[0].id;
+        await e.reviveCard(id);
+        const egg = e.world.creatures.find((c) => c.stage === 'egg' && c.parentA === 0);
+        return { cards: e.profile.geneCards.length, egg: !!egg };
+      }, pair);
+      console.log(`[${size}] gene card: ${JSON.stringify(card)}`);
+      // a request for exactly one of our creatures, then deliver it
+      const delivered = await page.evaluate(async () => {
+        const e = window.__eden;
+        const c = e.world.creatures.find((x) => x.stage === 'adult' && x.dying === 0 && x.ph.trophic !== 'carnivore' && x.bondId === 0);
+        e.profile.requests.open.push({ id: 'test-req', kind: 'deliver', from: '测试的小满', text: '测试', goal: '一只测试生命', spec: { adult: true, grazer: true, ranges: { size: [c.ph.radius - 0.01, c.ph.radius + 0.01] } }, reward: 40, difficulty: 1, createdAt: Date.now() });
+        const before = e.profile.lumen;
+        await e.deliverRequest('test-req', c.id);
+        return { gone: !e.world.creatureMap.has(c.id), gained: e.profile.lumen - before, completed: e.profile.requests.completed };
+      });
+      console.log(`[${size}] delivery: ${JSON.stringify(delivered)}`);
+      await page.mouse.move(w / 2, h - 12);
+      await page.waitForTimeout(900);
+      await page.getByRole('button', { name: '委托' }).click();
+      await shot('requests');
+      // move a creature into the nursery
+      const nurseryId = await page.evaluate(() => window.__eden.nursery()?.id);
+      await page.evaluate(async ({ a, nid }) => window.__eden.moveCreature(a, nid), { a: pair.a, nid: nurseryId });
+      await page.waitForTimeout(800);
+      await page.locator('.tank-tab', { hasText: '育种' }).click();
+      await page.waitForTimeout(1500);
+      const nursery = await page.evaluate(() => {
+        const e = window.__eden;
+        return { tank: e.tank().kind, creatures: e.world.creatures.length, predators: e.world.predatorCount };
+      });
+      console.log(`[${size}] nursery: ${JSON.stringify(nursery)}`);
+      await shot('nursery');
+    }
     if (scenario === 'tanks') {
       // several tanks, moving a creature, catching up after an absence, reloading
       const shot = async (name) => {

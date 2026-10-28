@@ -236,7 +236,8 @@ export function perceive(world: World, c: Creature): Perception {
         p.social = o;
       }
     }
-    if (breeding && canBreed(o) && (o.state === 'seekMate' || o.state === 'wander' || o.state === 'explore' || o.state === 'rest')) {
+    // someone else's chosen partner is not available
+    if (breeding && (!o.bondId || o.bondId === c.id) && canBreed(o) && (o.state === 'seekMate' || o.state === 'wander' || o.state === 'explore' || o.state === 'rest')) {
       const compat = compatibility(c.genome, o.genome, world.cfg.compatDistance);
       if (compat > 0.15) {
         const likeness = 1 - hueDist(c.ph.hue, o.ph.hue) * 2;

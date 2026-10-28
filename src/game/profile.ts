@@ -1,4 +1,5 @@
 import type { Genome } from '../sim/genome';
+import { newBoard, type RequestBoard } from './requests';
 
 /** What a tank is for. A nursery is small and has no predators. */
 export type TankKind = 'main' | 'nursery';
@@ -17,6 +18,11 @@ export interface TankInfo {
   simTime: number;
   population: number;
   generation: number;
+  /** Chronicle entries up to this id have been rewarded. */
+  seenEvent?: number;
+  /** Sim time up to which this tank's vitality has been paid, and the unpaid fraction. */
+  vitalityT?: number;
+  vitality?: number;
 }
 
 /** A creature's genes kept by the player, to be revived later (or taken into a challenge). */
@@ -45,6 +51,7 @@ export interface Profile {
   nextTankNo: number;
   geneCards: GeneCard[];
   cardSlots: number;
+  requests: RequestBoard;
   tutorial: { step: number; done: boolean };
   levels: Record<string, { stars: number; bestTime?: number; at?: number }>;
   achievements: Record<string, number>;
@@ -69,6 +76,7 @@ export function newProfile(now: number): Profile {
     nextTankNo: 1,
     geneCards: [],
     cardSlots: 6,
+    requests: newBoard(),
     tutorial: { step: 0, done: false },
     levels: {},
     achievements: {},
@@ -85,6 +93,7 @@ export function normalizeProfile(raw: Partial<Profile> | undefined, now: number)
   p.unlocks = Array.isArray(raw.unlocks) ? raw.unlocks.slice() : [];
   p.geneCards = Array.isArray(raw.geneCards) ? raw.geneCards.slice() : [];
   p.levels = { ...(raw.levels ?? {}) };
+  p.requests = raw.requests && Array.isArray(raw.requests.open) ? { ...newBoard(), ...raw.requests } : newBoard();
   p.achievements = { ...(raw.achievements ?? {}) };
   p.flags = { ...(raw.flags ?? {}) };
   if (!p.tanks.some((t) => t.id === p.activeTank)) p.activeTank = p.tanks[0]?.id ?? '';
@@ -96,4 +105,9 @@ export function normalizeProfile(raw: Partial<Profile> | undefined, now: number)
 
 export function tankLimit(p: Profile): number {
   return BASE_TANK_LIMIT + p.unlocks.filter((u) => u === 'tank-slot').length;
+}
+
+/** Ordinary tanks count against the limit; the nursery does not. */
+export function mainTankCount(p: Profile): number {
+  return p.tanks.filter((t) => t.kind !== 'nursery').length;
 }

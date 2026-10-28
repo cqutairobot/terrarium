@@ -6,12 +6,16 @@ import { ArchivePanel } from './components/ArchivePanel';
 import { AwayCard, CatchUpOverlay } from './components/CatchUp';
 import { ChroniclePanel } from './components/ChroniclePanel';
 import { CodexPanel } from './components/CodexPanel';
+import { PairHint, PairOfferCard } from './components/Pairing';
+import { RequestsPanel } from './components/RequestsPanel';
+import { ShopPanel } from './components/ShopPanel';
 import { CreatureCard } from './components/CreatureCard';
 import { Dock, type PanelId } from './components/Dock';
 import { EnvPanel } from './components/EnvPanel';
 import { LogPanel } from './components/LogPanel';
 import { StatsPanel } from './components/StatsPanel';
 import { TopBar } from './components/TopBar';
+import { Tutorial } from './components/Tutorial';
 import { WorldPanel } from './components/WorldPanel';
 import { Icon } from './icons';
 import { useEngineVersion } from './useEngine';
@@ -129,6 +133,7 @@ export function App({ engine, wallpaper }: { engine: Engine; wallpaper: boolean 
           break;
         case 'Escape':
           if (engine.aiming) engine.aim(null);
+          else if (engine.pairing || engine.pairOffer) engine.cancelPairing();
           else if (engine.lostFollow) engine.dismissLost();
           else if (panel) setPanel(null);
           else if (engine.renderer.selectedId) engine.select(0);
@@ -152,6 +157,8 @@ export function App({ engine, wallpaper }: { engine: Engine; wallpaper: boolean 
     world: ['世界与设置', <WorldPanel engine={engine} />],
     archive: ['生命档案馆', <ArchivePanel engine={engine} focus={storyFocus} setFocus={setStoryFocus} />],
     codex: ['生命图鉴', <CodexPanel engine={engine} />],
+    requests: ['委托', <RequestsPanel engine={engine} />],
+    shop: ['灵光商店', <ShopPanel engine={engine} />],
   };
   const open = panel && panel !== 'env' ? drawer[panel] : null;
 
@@ -188,9 +195,13 @@ export function App({ engine, wallpaper }: { engine: Engine; wallpaper: boolean 
 
       {!hidden && panel === 'env' && <EnvPanel engine={engine} />}
 
+      {!hidden && engine.pairing && <PairHint engine={engine} />}
+      {!hidden && engine.pairOffer && <PairOfferCard engine={engine} />}
+
       {!hidden && engine.aiming === 'meteor' && <div className="aim-hint glass">点击水中，选择流星坠落的地方 · 右键或 Esc 取消</div>}
 
       {!hidden && captions && <Captions engine={engine} />}
+      {!hidden && !engine.catchUp && !engine.away && <Tutorial engine={engine} panel={panel} />}
 
       {engine.catchUp && <CatchUpOverlay engine={engine} />}
       {!engine.catchUp && engine.away && !hidden && <AwayCard engine={engine} />}

@@ -22,7 +22,8 @@ export function breedingPressure(world: World, c: Creature): number {
 /** A suitor reached its chosen mate: try to begin the courtship dance. */
 export function tryCourt(world: World, c: Creature): void {
   const m = world.creatureMap.get(c.targetId);
-  if (!m || m.dying > 0 || !canBreed(c) || !canBreed(m) || m.state === 'court' || m.state === 'flee' || m.state === 'hunt') {
+  const promised = !!m && ((c.bondId !== 0 && c.bondId !== m.id) || (m.bondId !== 0 && m.bondId !== c.id));
+  if (!m || promised || m.dying > 0 || !canBreed(c) || !canBreed(m) || m.state === 'court' || m.state === 'flee' || m.state === 'hunt') {
     c.thinkTimer = 0;
     return;
   }

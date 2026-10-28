@@ -203,6 +203,7 @@ export function restoreWorld(input: WorldSnapshot): World {
   for (const sc of snap.creatures) {
     const c = clone(sc) as Creature;
     c.ph = express(c.genome);
+    c.bondId ??= 0;
     w.addCreature(c);
   }
   for (const p of snap.producers) w.addProducer(clone(p));

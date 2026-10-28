@@ -3,7 +3,7 @@ import type { Engine, FoodTool } from '../../engine/engine';
 import type { DisasterKind } from '../../sim/environment';
 import { Icon } from '../icons';
 
-export type PanelId = 'env' | 'stats' | 'log' | 'chronicle' | 'archive' | 'codex' | 'world';
+export type PanelId = 'env' | 'stats' | 'log' | 'chronicle' | 'archive' | 'codex' | 'requests' | 'shop' | 'world';
 
 interface Props {
   engine: Engine;
@@ -44,6 +44,8 @@ const PANELS: [PanelId, string, () => ReactNode][] = [
   ['chronicle', '世界编年史', Icon.chronicle],
   ['archive', '生命档案馆', Icon.archive],
   ['codex', '生命图鉴', Icon.codex],
+  ['requests', '委托', Icon.requests],
+  ['shop', '灵光商店', Icon.shop],
 ];
 
 /** The floating control dock that rises from the bottom edge. */

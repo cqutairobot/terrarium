@@ -1,10 +1,11 @@
 import { clamp } from './core/math';
 import type { Creature } from './entities/creature';
-import { express, geneticDistance, trophicOf, G } from './genome';
+import { cloneGenome, express, geneticDistance, trophicOf, G, type Genome } from './genome';
 import { pushStory, type LifeStory } from './history/stories';
 import { familyName } from './names';
 import type { SavedCreature } from './serialize';
-import { foundSpecies } from './systems/ecology';
+import { createCreature } from './spawn';
+import { foundSpecies, takeAnywhere } from './systems/ecology';
 import type { World } from './world';
 
 /** A creature on its way from one tank to another, as plain data. */
@@ -48,6 +49,7 @@ export function emigrate(world: World, id: number, to: string): Traveller | null
   // nobody keeps waiting for it
   for (const o of world.creatures) {
     if (o.partnerId === id) o.partnerId = 0;
+    if (o.bondId === id) o.bondId = 0;
     if (o.targetId === id && o.targetKind === 'creature') {
       o.targetKind = 'none';
       o.targetId = 0;
@@ -65,6 +67,76 @@ export function emigrate(world: World, id: number, to: string): Traveller | null
   h.add('movedOut', 1, { name: c.customName || c.name, to });
   const { ph: _ph, ...saved } = c;
   return { creature: structuredClone(saved), story: story ? structuredClone(story) : null, from: world.name, fromTime: world.time, matter };
+}
+
+/** The nearest living species of the same diet, if close enough to be kin; otherwise a new one. */
+export function speciesFor(world: World, genome: Genome): number {
+  const trophic = trophicOf(genome.g[G.diet]);
+  let best = 0;
+  let bd = Infinity;
+  for (const sp of world.species.values()) {
+    if (sp.extinctAt !== null || sp.population <= 0 || sp.trophic !== trophic || sp.centroid.length !== genome.g.length) continue;
+    const d = geneticDistance({ g: sp.centroid, rare: [] }, genome);
+    if (d < bd) {
+      bd = d;
+      best = sp.id;
+    }
+  }
+  return best && bd < world.cfg.speciationDistance ? best : foundSpecies(world, genome);
+}
+
+/** A creature from elsewhere starts a family line of its own here. */
+function foundFamily(world: World, c: Creature): void {
+  world.families.set(c.id, {
+    id: c.id,
+    name: familyName(world.rng),
+    founderId: c.id,
+    founderName: c.customName || c.name,
+    founderGen: c.generation,
+    foundedAt: world.time,
+    speciesId: c.speciesId,
+    hue: c.genome.g[G.hue],
+    living: 0,
+    maxGen: c.generation,
+    totalMembers: 0,
+    extinctAt: null,
+    milestones: [],
+  });
+}
+
+/**
+ * Genes kept on a card come back as an egg. Its matter is gathered from the
+ * tank's own nutrients, like any egg's would be.
+ */
+export function hatchGenome(world: World, genome: Genome, generation: number): Creature | null {
+  const rng = world.rng;
+  const ph = express(genome);
+  const pool = ph.adultStructure * 0.2025 + ph.maxEnergy * 0.2025 * (0.6 + 0.4 * ph.investFraction);
+  const got = takeAnywhere(world, pool);
+  if (got < pool * 0.5) {
+    // not enough in the water for a healthy egg: give it back
+    world.env.addNutrient(world.width / 2, world.groundAt(world.width / 2) - 10, got);
+    return null;
+  }
+  const id = world.newId();
+  const x = rng.range(world.width * 0.3, world.width * 0.7);
+  const y = clamp(rng.range(160, 320), 60, world.groundAt(x) - 60);
+  const egg = createCreature({
+    id,
+    genome: cloneGenome(genome),
+    x,
+    y,
+    time: world.time,
+    rng,
+    speciesId: speciesFor(world, genome),
+    familyId: id,
+    generation,
+    eggEnergy: got,
+    hatchTime: world.cfg.hatchTime,
+  });
+  world.addCreature(egg);
+  foundFamily(world, egg);
+  return egg;
 }
 
 /**
@@ -86,6 +158,7 @@ export function immigrate(world: World, t: Traveller): Creature {
   c.tags = [];
   c.disasters = [];
   c.partnerId = 0;
+  c.bondId = 0;
   c.threatId = 0;
   c.lastAttacker = 0;
   c.targetKind = 'none';
@@ -112,35 +185,9 @@ export function immigrate(world: World, t: Traveller): Creature {
   c.px = c.x;
   c.py = c.y;
 
-  // the nearest species of the same diet, if it is close enough to be kin
-  const trophic = trophicOf(c.genome.g[G.diet]);
-  let best = 0;
-  let bd = Infinity;
-  for (const sp of world.species.values()) {
-    if (sp.extinctAt !== null || sp.population <= 0 || sp.trophic !== trophic || sp.centroid.length !== c.genome.g.length) continue;
-    const d = geneticDistance({ g: sp.centroid, rare: [] }, c.genome);
-    if (d < bd) {
-      bd = d;
-      best = sp.id;
-    }
-  }
-  c.speciesId = best && bd < world.cfg.speciationDistance ? best : foundSpecies(world, c.genome);
+  c.speciesId = speciesFor(world, c.genome);
   c.familyId = id;
-  world.families.set(id, {
-    id,
-    name: familyName(rng),
-    founderId: id,
-    founderName: c.customName || c.name,
-    founderGen: c.generation,
-    foundedAt: world.time,
-    speciesId: c.speciesId,
-    hue: c.genome.g[G.hue],
-    living: 0,
-    maxGen: c.generation,
-    totalMembers: 0,
-    extinctAt: null,
-    milestones: [],
-  });
+  foundFamily(world, c);
   if (c.stage !== 'egg') {
     const sp = world.species.get(c.speciesId)!;
     sp.population++;

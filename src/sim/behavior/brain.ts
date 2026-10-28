@@ -58,7 +58,13 @@ export function think(world: World, c: Creature): void {
   if (c.state === 'eat' || (carnivorous && p.foodKind === 'corpse')) scores.hunt *= 0.3;
   const eFrac = c.energy / maxE;
   const ready = canBreed(c);
-  const mate = ready ? (p.mate ?? distantMate(world, c)) : null;
+  // a pair matched by the player looks only for each other, across the whole tank
+  let partner = c.bondId ? world.creatureMap.get(c.bondId) : undefined;
+  if (c.bondId && (!partner || partner.dying > 0)) {
+    c.bondId = 0;
+    partner = undefined;
+  }
+  const mate = ready ? (partner ? (canBreed(partner) ? partner : null) : (p.mate ?? distantMate(world, c))) : null;
   scores.seekMate = ready
     ? (eFrac - ph.reproThreshold + 0.3) *
       1.3 *
@@ -70,6 +76,8 @@ export function think(world: World, c: Creature): void {
       // photoperiod: breed when one's own active hours are at hand
       (0.3 + 0.7 * (1 - sleepy))
     : 0;
+  // the player's match wins over crowding and mood once both are ready; until then, it waits
+  if (partner) scores.seekMate = mate ? Math.max(0.65, scores.seekMate * 2) : scores.seekMate * 0.3;
   // searching blindly in one's sleeping hours is a poor bargain: better to save energy
   const foodKnown = p.foodKind !== 'none' || memFresh;
   const blindSearch = 0.9 * (1 - 0.7 * sleepy);

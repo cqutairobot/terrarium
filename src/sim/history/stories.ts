@@ -18,6 +18,9 @@ export type StoryKind =
   | 'death'
   | 'lineEnd'
   | 'moved'
+  | 'bonded'
+  | 'delivered'
+  | 'released'
   | 'record';
 
 export interface StoryEntry {
@@ -154,6 +157,12 @@ export function narrateStory(s: LifeStory, e: StoryEntry): string {
       return `最后一个后裔也离开了。这条血脉延续了 ${p.n} 代。`;
     case 'moved':
       return `从「${p.from}」搬到了「${p.to}」。`;
+    case 'bonded':
+      return `在你的牵线下，和${p.mate}结为伴侣。`;
+    case 'delivered':
+      return `被送到了${p.to}那里，在新的地方开始生活。`;
+    case 'released':
+      return '被你放归了远方的湖泊。';
     case 'record':
       return String(p.text ?? '');
   }

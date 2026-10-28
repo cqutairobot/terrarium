@@ -94,6 +94,11 @@ export class Input {
       return;
     }
     const hit = eng.renderer.pick(p.x, p.y);
+    if (eng.pairing) {
+      if (hit) eng.choosePartner(hit.id);
+      else eng.cancelPairing();
+      return;
+    }
     if (hit) {
       eng.select(eng.renderer.selectedId === hit.id ? 0 : hit.id);
       return;

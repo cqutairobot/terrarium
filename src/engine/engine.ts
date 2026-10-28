@@ -1,6 +1,13 @@
 import { Ambient } from '../audio/ambient';
 import { awayFacts, summarizeAway, type AwaySummary } from '../game/away';
-import { PROFILE_KEY, tankLimit, type Profile, type TankInfo } from '../game/profile';
+import { bond, forecastBrood, pairProblem, unbond, type BroodForecast } from '../game/breeding';
+import { canBuy, itemById, priceOf, rewardFor, vitalityPerMinute } from '../game/economy';
+import { candidatesFor, closeRequest, ecologyStatus, refreshBoard } from '../game/requests';
+import { TUTORIAL } from '../game/tutorial';
+import { pushStory } from '../sim/history/stories';
+import { mainTankCount, PROFILE_KEY, tankLimit, type Profile, type TankInfo } from '../game/profile';
+import { shownHue } from '../game/conditions';
+import { cardLimit, has } from '../game/economy';
 import { addTank, syncTankInfo, tankRecord } from '../game/tanks';
 import type { StorageAdapter, SaveMeta } from '../persist/storage';
 import { downloadSnapshot, readSnapshotFile } from '../persist/exportImport';
@@ -9,7 +16,10 @@ import type { EcoConfig, EnvSettings } from '../sim/config';
 import type { Creature } from '../sim/entities/creature';
 import type { FoodKind } from '../sim/entities/food';
 import type { DisasterKind } from '../sim/environment';
-import { emigrate, immigrate } from '../sim/migration';
+import { cloneGenome, G } from '../sim/genome';
+import { emigrate, hatchGenome, immigrate } from '../sim/migration';
+import { rareTraitKeys } from '../sim/rareTraits';
+import { introduceFounders, scatterSeeds } from '../sim/systems/ecology';
 import { restoreWorld, snapshotWorld } from '../sim/serialize';
 import { SIM_DT, World } from '../sim/world';
 import { CatchUpRunner } from './catchUp';
@@ -44,7 +54,19 @@ export interface CatchUpState {
   stopping: boolean;
 }
 
+/** A little "+N" that floats up from the lumen counter. */
+export interface LumenPop {
+  id: number;
+  amount: number;
+  reason: string;
+}
+
+/** Reviving a gene card costs a little lumen (and the egg is made of the tank's own matter). */
+export const REVIVE_PRICE = 15;
+
 const AUTOSAVE_EVERY = 60;
+/** Vitality paid for one catch-up is capped, so long absences do not flood the purse. */
+const VITALITY_CATCH_UP_CAP = 60;
 /** Shorter absences are simply resumed. */
 const MIN_AWAY_MS = 60_000;
 /** At most two simulated hours are made up at once. */
@@ -79,6 +101,16 @@ export class Engine {
   away: AwaySummary | null = null;
   /** A tank operation (switch, move, create) is under way. */
   busy = false;
+  /** Choosing a partner for this creature (the next creature clicked). */
+  pairing: { firstId: number } | null = null;
+  /** Two creatures proposed as a pair, with what their young would be like. */
+  pairOffer: { a: number; b: number; forecast: BroodForecast } | null = null;
+  lumenPops: LumenPop[] = [];
+  /** Pinches of food scattered this session (the tutorial watches it). */
+  feeds = 0;
+  private economyAcc = 0;
+  private profileDirty = false;
+  private profileSaveAcc = 0;
   prefs: Prefs;
   readonly audio = new Ambient();
   private qualityAcc = 0;
@@ -114,6 +146,18 @@ export class Engine {
         if (this.autosaveAcc >= (this.prefs.powerSave ? AUTOSAVE_EVERY_QUIET : AUTOSAVE_EVERY)) {
           this.autosaveAcc = 0;
           this.idle(() => void this.saveActive());
+        }
+        this.economyAcc += realDt;
+        if (this.economyAcc >= 1) {
+          this.economyAcc = 0;
+          this.collectRewards();
+          this.tendRequests();
+        }
+        // lumen is precious: write the profile soon after it changes
+        this.profileSaveAcc += realDt;
+        if (this.profileDirty && this.profileSaveAcc >= 10 && !this.saving) {
+          this.profileSaveAcc = 0;
+          void this.saveProfile();
         }
         this.qualityAcc += realDt;
         if (this.qualityAcc >= 2) {
@@ -312,6 +356,63 @@ export class Engine {
     return true;
   }
 
+  // ------------------------------------------------------------ pairing
+
+  startPairing(id: number): void {
+    const c = this.world.creatureMap.get(id);
+    if (!c || c.dying > 0 || c.stage === 'egg') return;
+    this.aiming = null;
+    this.pairOffer = null;
+    this.pairing = { firstId: id };
+    this.publish();
+  }
+
+  cancelPairing(): void {
+    this.pairing = null;
+    this.pairOffer = null;
+    this.publish();
+  }
+
+  /** The second creature was chosen: show what their young would be like. */
+  choosePartner(id: number): void {
+    const first = this.pairing ? this.world.creatureMap.get(this.pairing.firstId) : undefined;
+    const second = this.world.creatureMap.get(id);
+    if (!first || !second) {
+      this.cancelPairing();
+      return;
+    }
+    const problem = pairProblem(first, second);
+    if (problem) {
+      this.toast(problem);
+      return;
+    }
+    this.pairing = null;
+    this.pairOffer = { a: first.id, b: second.id, forecast: forecastBrood(this.world, first, second) };
+    this.publish();
+  }
+
+  confirmPair(): void {
+    const offer = this.pairOffer;
+    const a = offer ? this.world.creatureMap.get(offer.a) : undefined;
+    const b = offer ? this.world.creatureMap.get(offer.b) : undefined;
+    this.pairOffer = null;
+    if (!a || !b || a.dying > 0 || b.dying > 0) {
+      this.publish();
+      return;
+    }
+    bond(this.world, a, b);
+    const name = (c: Creature) => c.customName || c.name;
+    this.world.history.note(a.id, 'bonded', { mate: name(b) });
+    this.world.history.note(b.id, 'bonded', { mate: name(a) });
+    this.toast(`「${name(a)}」和「${name(b)}」结为伴侣，都准备好时就会去找对方`);
+  }
+
+  breakBond(id: number): void {
+    const c = this.world.creatureMap.get(id);
+    if (c) unbond(this.world, c);
+    this.publish();
+  }
+
   // ------------------------------------------------------------ interventions
 
   setTool(t: FoodTool): void {
@@ -323,6 +424,23 @@ export class Engine {
   feedAt(x: number, y: number, count: number): void {
     if (this.tool === 'none') return;
     this.world.feed(this.tool, x, y, count);
+    this.feeds++;
+  }
+
+  // ------------------------------------------------------------ tutorial
+
+  advanceTutorial(): void {
+    const t = this.profile.tutorial;
+    t.step++;
+    if (t.step >= TUTORIAL.length) t.done = true;
+    this.profileDirty = true;
+    this.publish();
+  }
+
+  skipTutorial(): void {
+    this.profile.tutorial.done = true;
+    this.profileDirty = true;
+    this.publish();
   }
 
   aim(kind: DisasterKind | null): void {
@@ -431,7 +549,242 @@ export class Engine {
 
   private async saveProfile(): Promise<void> {
     this.profile.lastSeen = Date.now();
+    this.profileDirty = false;
     await this.storage.putDoc(PROFILE_KEY, this.profile);
+  }
+
+  // ------------------------------------------------------------ lumen
+
+  /** Add lumen; notable amounts are also announced. */
+  earn(amount: number, reason: string, quiet = false): void {
+    if (amount <= 0) return;
+    this.profile.lumen += amount;
+    this.profile.lumenEarned += amount;
+    this.profileDirty = true;
+    const pop = { id: this.toastId++, amount, reason };
+    this.lumenPops = [...this.lumenPops.slice(-3), pop];
+    setTimeout(() => {
+      this.lumenPops = this.lumenPops.filter((x) => x !== pop);
+      this.publish();
+    }, 2600);
+    if (!quiet && amount >= 15) this.toast(`+${amount} 灵光 · ${reason}`);
+    this.publish();
+  }
+
+  /**
+   * Reward what really happened in the shown tank since last time (from its
+   * chronicle), plus a gentle income for a living, varied tank.
+   */
+  private collectRewards(quietSummary = false): void {
+    const info = this.profile.tanks.find((t) => t.id === this.tankId);
+    if (!info) return;
+    const w = this.world;
+    const chron = w.history.chronicle;
+    const lastId = chron.length ? chron[chron.length - 1].id : 0;
+    if (info.seenEvent === undefined) {
+      // a tank from before the economy existed: its past is not paid out
+      info.seenEvent = lastId;
+      info.vitalityT = w.time;
+      info.vitality = 0;
+      this.profileDirty = true;
+      return;
+    }
+    let total = 0;
+    let count = 0;
+    for (let i = chron.length - 1; i >= 0 && chron[i].id > info.seenEvent; i--) {
+      const r = rewardFor(chron[i], this.profile);
+      if (!r) continue;
+      if (r.flag) this.profile.flags[r.flag] = 1;
+      if (quietSummary) {
+        total += r.amount;
+        count++;
+      } else this.earn(r.amount, r.reason);
+    }
+    info.seenEvent = Math.max(info.seenEvent, lastId);
+    const minutes = Math.max(0, w.time - (info.vitalityT ?? w.time)) / 60;
+    info.vitalityT = w.time;
+    const due = (info.vitality ?? 0) + Math.min(VITALITY_CATCH_UP_CAP, minutes * vitalityPerMinute(w));
+    const whole = Math.floor(due);
+    info.vitality = due - whole;
+    if (quietSummary) total += whole;
+    else if (whole > 0) this.earn(whole, '水缸里生机勃勃', true);
+    if (quietSummary && total > 0) this.earn(total, count > 0 ? `你不在时的 ${count} 个发现与水缸的生机` : '你不在时水缸的生机');
+  }
+
+  // ------------------------------------------------------------ requests
+
+  /** Keep the board full, finish ecology requests the tank has met, notice ready deliveries. */
+  private tendRequests(): void {
+    const board = this.profile.requests;
+    const w = this.world;
+    if (refreshBoard(board, w, Date.now())) this.profileDirty = true;
+    for (const r of [...board.open]) {
+      if (r.kind === 'ecology') {
+        if (ecologyStatus(w, board, r).met) this.completeRequest(r.id);
+      } else if (!r.ready && candidatesFor(w, r).length > 0) {
+        r.ready = true;
+        this.profileDirty = true;
+        this.toast(`「${w.name}」里有生命符合${r.from}的委托了`);
+      }
+    }
+  }
+
+  private completeRequest(id: string): void {
+    const r = this.profile.requests.open.find((x) => x.id === id);
+    if (!r) return;
+    closeRequest(this.profile.requests, id, true);
+    this.earn(r.reward, `完成了${r.from}的委托`, true);
+    this.toast(`完成委托：${r.from}收到了「${r.goal}」 · +${r.reward} 灵光`);
+    refreshBoard(this.profile.requests, this.world, Date.now());
+  }
+
+  /** Give a matching creature to the one who asked; it leaves the tank for good. */
+  async deliverRequest(id: string, cid: number): Promise<void> {
+    const r = this.profile.requests.open.find((x) => x.id === id);
+    const c = this.world.creatureMap.get(cid);
+    if (!r || !c || !candidatesFor(this.world, r).includes(c)) return;
+    // a watched life keeps its place in the archive, its story closed with the journey
+    if (!this.sendAway(cid, r.from, 'delivered')) return;
+    this.completeRequest(id);
+    await this.saveActive();
+  }
+
+  /** A creature leaves the tank for good; a watched one's story closes with how it left. */
+  private sendAway(cid: number, to: string, k: 'delivered' | 'released'): boolean {
+    const w = this.world;
+    const c = w.creatureMap.get(cid);
+    if (!c) return false;
+    const age = c.age;
+    const t = emigrate(w, cid, to);
+    if (!t) return false;
+    if (t.story) {
+      const s = t.story;
+      if (s.events[s.events.length - 1]?.k === 'moved') s.events.pop();
+      pushStory(s, { t: w.time, w: Date.now(), k, p: { to } });
+      s.diedT = w.time;
+      s.diedW = Date.now();
+      s.cause = '远行';
+      s.age = age;
+      w.history.stories.set(s.id, s);
+    }
+    if (this.renderer.selectedId === cid) this.select(0);
+    if (this.renderer.followId === cid) this.follow(0);
+    return true;
+  }
+
+  /** Let a creature go: a small thank-you in lumen, more for rare looks. */
+  async release(cid: number): Promise<void> {
+    const c = this.world.creatureMap.get(cid);
+    if (!c || c.dying > 0 || this.catchUp) return;
+    const name = c.customName || c.name;
+    const gift = Math.min(20, 2 + 5 * rareTraitKeys(c.ph.rare).length);
+    if (!this.sendAway(cid, '远方的湖泊', 'released')) return;
+    this.earn(gift, `放生了「${name}」`, true);
+    this.toast(`「${name}」游向了远方 · +${gift} 灵光`);
+    await this.saveActive();
+  }
+
+  // ------------------------------------------------------------ gene cards
+
+  /** Keep a creature's genes on a card, to revive later in any tank (or take into a challenge). */
+  saveCard(cid: number): void {
+    const c = this.world.creatureMap.get(cid);
+    if (!c) return;
+    const p = this.profile;
+    if (p.geneCards.length >= cardLimit(p)) {
+      this.toast(`生命卡已经满了（${cardLimit(p)} 张）`);
+      return;
+    }
+    p.geneCards.push({
+      id: `card-${Date.now()}-${c.id}`,
+      name: c.customName || c.name,
+      genome: cloneGenome(c.genome),
+      species: this.world.species.get(c.speciesId)?.name ?? '',
+      generation: c.generation,
+      hue: shownHue(c),
+      savedAt: Date.now(),
+    });
+    this.profileDirty = true;
+    this.toast(`「${c.customName || c.name}」的基因存成了生命卡`);
+  }
+
+  deleteCard(id: string): void {
+    this.profile.geneCards = this.profile.geneCards.filter((x) => x.id !== id);
+    this.profileDirty = true;
+    this.publish();
+  }
+
+  /** A gene card comes back to life as an egg in the shown tank. */
+  async reviveCard(id: string): Promise<void> {
+    const card = this.profile.geneCards.find((x) => x.id === id);
+    if (!card || this.catchUp) return;
+    if (this.profile.lumen < REVIVE_PRICE) {
+      this.toast('灵光不够');
+      return;
+    }
+    if (card.genome.g[G.diet] > 0.65 && this.tank().kind === 'nursery') {
+      this.toast('育种缸里不能放掠食者');
+      return;
+    }
+    const egg = hatchGenome(this.world, card.genome, card.generation);
+    if (!egg) {
+      this.toast('水里的养分不够孕育一颗卵，过一会儿再试试');
+      return;
+    }
+    this.profile.lumen -= REVIVE_PRICE;
+    this.profileDirty = true;
+    this.select(egg.id);
+    this.toast(`生命卡「${card.name}」在「${this.world.name}」里化作了一颗卵`);
+    await this.saveActive();
+  }
+
+  /** Set a request aside; a new one takes its place. */
+  skipRequest(id: string): void {
+    closeRequest(this.profile.requests, id, false);
+    refreshBoard(this.profile.requests, this.world, Date.now());
+    this.profileDirty = true;
+    this.publish();
+  }
+
+  /** Buy something from the shop; goods arrive in the shown tank. */
+  async buy(id: string): Promise<void> {
+    const item = itemById(id);
+    if (!item || this.catchUp) return;
+    const check = canBuy(this.profile, item);
+    if (!check.ok) {
+      this.toast(check.why ?? '现在还买不了');
+      return;
+    }
+    if (item.predators && this.tank().kind === 'nursery') {
+      this.toast('育种缸里不能放掠食者');
+      return;
+    }
+    const price = priceOf(this.profile, item);
+    if (item.kind === 'goods') {
+      const ok = this.deliver(id);
+      if (!ok) {
+        this.toast('水缸里现在放不下了');
+        return;
+      }
+    } else this.profile.unlocks.push(id);
+    this.profile.lumen -= price;
+    if (id === 'nursery') await this.createNursery();
+    this.toast(item.kind === 'goods' ? `「${item.name}」来到了「${this.world.name}」` : `得到了「${item.name}」`);
+    await this.saveProfile();
+    if (item.kind === 'goods') await this.saveActive();
+    this.publish();
+  }
+
+  private deliver(id: string): boolean {
+    if (id === 'seeds') return scatterSeeds(this.world, 6) > 0;
+    if (id.startsWith('founders:')) {
+      const key = id.slice('founders:'.length);
+      const predator = key === 'glider' || key === 'lurker';
+      const room = this.world.cfg.maxCreatures - this.world.creatures.length;
+      if (room < (predator ? 2 : 6)) return false;
+      return introduceFounders(this.world, key, predator ? 2 : 6).length > 0;
+    }
+    return false;
   }
 
   /** Write the shown tank (and the profile) to storage. */
@@ -439,6 +792,7 @@ export class Engine {
     if (this.saving || this.catchUp) return false;
     this.saving = true;
     try {
+      this.collectRewards();
       const now = Date.now();
       await this.storage.put(tankRecord(this.world, this.tankId, now));
       const info = this.profile.tanks.find((t) => t.id === this.tankId);
@@ -502,7 +856,30 @@ export class Engine {
   }
 
   canAddTank(): boolean {
-    return this.profile.tanks.length < tankLimit(this.profile);
+    return mainTankCount(this.profile) < tankLimit(this.profile);
+  }
+
+  nursery(): TankInfo | undefined {
+    return this.profile.tanks.find((t) => t.kind === 'nursery');
+  }
+
+  /** The nursery: small, calm, no predators, and empty until the player brings someone. */
+  async createNursery(): Promise<void> {
+    if (!has(this.profile, 'nursery') || this.nursery() || this.busy) return;
+    this.busy = true;
+    try {
+      const w = new World({ seed: randomSeed(), aspect: 1.3, name: '育种缸', config: { wildLife: false, maxPredators: 0 }, lifeless: true });
+      const now = Date.now();
+      const keep = this.profile.activeTank;
+      const id = addTank(this.profile, w, now, 'nursery');
+      this.profile.activeTank = keep;
+      await this.storage.put(tankRecord(w, id, now));
+      await this.saveProfile();
+      this.toast('育种缸准备好了：在顶部切换过去，再把选中的生命搬进来');
+    } finally {
+      this.busy = false;
+      this.publish();
+    }
   }
 
   /** A new tank with a fresh world, shown right away. */
@@ -593,6 +970,10 @@ export class Engine {
     const info = this.profile.tanks.find((t) => t.id === toId);
     const c = this.world.creatureMap.get(cid);
     if (!info || !c || c.dying > 0) return;
+    if (info.kind === 'nursery' && c.ph.trophic === 'carnivore') {
+      this.toast('育种缸里不能放掠食者');
+      return;
+    }
     this.busy = true;
     try {
       const rec = await this.storage.get(toId);
@@ -681,6 +1062,7 @@ export class Engine {
       this.setWorld(after);
       this.catchUp = null;
       if (result.simulated >= 60) this.away = summarizeAway(summaryStart, after, awayMs, result.simulated, result.simulated + 1 < seconds);
+      this.collectRewards(true);
       await this.saveActive();
     } catch (err) {
       this.toast('补上离开的时间时出了点问题：' + String((err as Error)?.message ?? err));

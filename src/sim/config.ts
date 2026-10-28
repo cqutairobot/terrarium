@@ -62,6 +62,9 @@ export interface EcoConfig {
 
   // behavior
   thinkInterval: number;
+
+  /** Wild life finds its way in: dormant spores revive consumers, strangers bring predators back. Off in a nursery. */
+  wildLife: boolean;
 }
 
 export const DEFAULT_CONFIG: EcoConfig = {
@@ -116,6 +119,7 @@ export const DEFAULT_CONFIG: EcoConfig = {
   speciationDistance: 0.2,
 
   thinkInterval: 0.45,
+  wildLife: true,
 };
 
 /** Environment controls the observer can change (targets; the world eases toward them). */

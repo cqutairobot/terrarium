@@ -423,6 +423,12 @@ export class History {
     pushStory(s, { t, w, k, p });
   }
 
+  /** Add a line to a life's story, if that life has one. */
+  note(id: number, k: StoryEntry['k'], p: StoryEntry['p'] = {}): void {
+    const s = this.stories.get(id);
+    if (s && s.diedT < 0) this.story(s, k, p);
+  }
+
   isWatched(id: number): boolean {
     return this.stories.get(id)?.watched ?? false;
   }

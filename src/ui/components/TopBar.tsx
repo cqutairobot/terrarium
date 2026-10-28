@@ -23,6 +23,7 @@ export function TopBar({ engine }: { engine: Engine }) {
               disabled={engine.busy || engine.catchUp !== null}
             >
               <span className="tank-name">{active ? w.name : t.name}</span>
+              {t.kind === 'nursery' && <span className="tank-kind">育种</span>}
               <span className="tank-pop">{active ? w.consumerCount + w.predatorCount : t.population}</span>
             </button>
           );
@@ -32,6 +33,14 @@ export function TopBar({ engine }: { engine: Engine }) {
             <Icon.plus />
           </button>
         )}
+      </div>
+      <div className="lumen glass" title="灵光：来自水缸里真实发生的事，可以在商店里换东西">
+        <span>✦ {Math.floor(engine.profile.lumen)}</span>
+        {engine.lumenPops.map((p) => (
+          <span key={p.id} className="lumen-pop" title={p.reason}>
+            +{p.amount}
+          </span>
+        ))}
       </div>
       <div className="world-line-top glass">
         <span>{worldClock(w)}</span>

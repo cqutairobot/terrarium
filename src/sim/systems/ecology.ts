@@ -1,6 +1,7 @@
 import { CONSUMER_ARCHETYPES, PREDATOR_ARCHETYPES } from '../archetypes';
 import { clamp } from '../core/math';
 import { cloneGenome, express, genomeFromTemplate, G, mutateGenes, type Genome } from '../genome';
+import type { Creature } from '../entities/creature';
 import { familyName, speciesName } from '../names';
 import { createCreature, createSeed } from '../spawn';
 import type { World } from '../world';
@@ -50,7 +51,11 @@ export function updateEcology(world: World): void {
     if (c.ph.trophic === 'carnivore') predators++;
     else consumers++;
   }
-  if (consumers === 0) {
+  if (!world.cfg.wildLife) {
+    // a nursery: only the player brings animals in
+    st.consumerGoneAt = -1;
+    st.predatorGoneAt = -1;
+  } else if (consumers === 0) {
     if (st.consumerGoneAt < 0) {
       st.consumerGoneAt = t;
       world.events.push({ t: 'allGone', kind: 'consumer' });
@@ -60,7 +65,9 @@ export function updateEcology(world: World): void {
     }
   } else st.consumerGoneAt = -1;
 
-  if (predators === 0) {
+  if (!world.cfg.wildLife) {
+    /* no strangers either */
+  } else if (predators === 0) {
     if (st.predatorGoneAt < 0) {
       st.predatorGoneAt = t;
       world.events.push({ t: 'allGone', kind: 'predator' });
@@ -188,6 +195,43 @@ export function foundSpecies(world: World, genome: Genome): number {
   return id;
 }
 
+/**
+ * New life introduced from outside (the player's shop): a small group of one
+ * founding body plan, as a species of its own. Their bodies are built from
+ * the tank's own nutrients, so the matter ledger stays whole.
+ */
+export function introduceFounders(world: World, key: string, count: number): Creature[] {
+  const arch = [...CONSUMER_ARCHETYPES, ...PREDATOR_ARCHETYPES].find((a) => a.key === key);
+  if (!arch) return [];
+  const predator = PREDATOR_ARCHETYPES.includes(arch);
+  const rng = world.rng;
+  const shift = rng.range(-0.06, 0.06);
+  const genomes: Genome[] = [];
+  for (let i = 0; i < count; i++) {
+    const g = genomeFromTemplate(arch.template, rng, 0.035);
+    g.g[G.hue] = (g.g[G.hue] + shift + 1) % 1;
+    genomes.push(g);
+  }
+  const species = foundSpecies(world, genomes[0]);
+  const before = new Set(world.creatures.map((c) => c.id));
+  for (const g of genomes) spawnFounder(world, g, species, 0, predator);
+  return world.creatures.filter((c) => !before.has(c.id));
+}
+
+/** A handful of plant seeds scattered from the surface (made of the tank's own nutrients). */
+export function scatterSeeds(world: World, count: number): number {
+  const rng = world.rng;
+  let n = 0;
+  for (let i = 0; i < count && world.seeds.length < world.cfg.maxSeeds; i++) {
+    const x = rng.range(60, world.width - 60);
+    const energy = takeAnywhere(world, 4);
+    if (energy <= 0) break;
+    world.seeds.push(createSeed(world.newId(), x, rng.range(40, 120), rng.range(0.28, 0.4), energy, rng));
+    n++;
+  }
+  return n;
+}
+
 function spawnFounder(world: World, genome: Genome, species: number, generation: number, predator: boolean): void {
   const rng = world.rng;
   const id = world.newId();
@@ -227,7 +271,7 @@ function spawnFounder(world: World, genome: Genome, species: number, generation:
   world.recordBirth(c);
 }
 
-function takeAnywhere(world: World, amount: number): number {
+export function takeAnywhere(world: World, amount: number): number {
   const env = world.env;
   let got = 0;
   for (let i = 0; i < env.nutrient.length && got < amount; i++) {

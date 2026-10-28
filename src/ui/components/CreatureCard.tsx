@@ -4,6 +4,8 @@ import { maxEnergyOf } from '../../sim/behavior/perception';
 import { celsius } from '../../sim/config';
 import { STATE_LABELS, type Creature } from '../../sim/entities/creature';
 import { GENE_DEFS } from '../../sim/genome';
+import { matchesSpec } from '../../game/conditions';
+import { has } from '../../game/economy';
 import { displayName } from '../../sim/history/stories';
 import { alleleCount, RARE_DEFS, rareKeyLabel, rareTraitKeys } from '../../sim/rareTraits';
 import { familyDepth } from '../../sim/registry';
@@ -103,6 +105,8 @@ export function CreatureCard({ engine, c, openStory }: { engine: Engine; c: Crea
         </button>
       </div>
 
+      <RequestMatch engine={engine} c={c} />
+
       {moving && (
         <div className="move-menu">
           <span className="muted small">它会带着自己的故事，搬到另一个水缸里继续生活：</span>
@@ -141,7 +145,8 @@ function NowTab({ engine, c }: { engine: Engine; c: Creature }) {
   const energy = egg ? 1 : c.energy / Math.max(1e-6, maxE);
   const health = egg ? 1 : c.health / Math.max(1e-6, healthMax(c));
   const rare = rareTraitKeys(ph.rare);
-  const carried = RARE_DEFS.map((d, i) => ({ d, n: alleleCount(c.genome.rare, i) })).filter((x) => x.n > 0);
+  // hidden alleles are only seen through the gene lens
+  const carried = has(engine.profile, 'lens') ? RARE_DEFS.map((d, i) => ({ d, n: alleleCount(c.genome.rare, i) })).filter((x) => x.n > 0) : [];
   return (
     <>
       <div className="chips">
@@ -166,6 +171,10 @@ function NowTab({ engine, c }: { engine: Engine; c: Creature }) {
         <b>{personality(c).join(' · ')}</b>
         <span>所在</span>
         <b>{world.history.placeNow(c)}</b>
+        <span>伴侣</span>
+        <b>
+          <Partner engine={engine} c={c} />
+        </b>
       </div>
 
       <div className="section-title">遗传特征</div>
@@ -180,6 +189,18 @@ function NowTab({ engine, c }: { engine: Engine; c: Creature }) {
         <Trait label="繁殖冷却" value={`${Math.round(ph.reproCooldown)}秒`} />
         <Trait label="适温" value={`${celsius(ph.thermalPref).toFixed(0)}°C`} />
       </div>
+      {c.dying === 0 && (
+        <div className="btn-row card-tools">
+          <button className="btn small ghost" onClick={() => engine.saveCard(c.id)}>
+            存为生命卡
+          </button>
+          {!egg && (
+            <button className="btn small ghost" onClick={() => void engine.release(c.id)}>
+              放生
+            </button>
+          )}
+        </div>
+      )}
       <div className="dna" title="基因组 DNA：每一条代表一个基因">
         {c.genome.g.map((v, i) => (
           <i
@@ -206,6 +227,44 @@ function NowTab({ engine, c }: { engine: Engine; c: Creature }) {
         </div>
       )}
     </>
+  );
+}
+
+/** This creature is just what someone asked for. */
+function RequestMatch({ engine, c }: { engine: Engine; c: Creature }) {
+  const r = engine.profile.requests.open.find((x) => x.kind === 'deliver' && x.spec && matchesSpec(c, x.spec));
+  if (!r) return null;
+  return (
+    <div className="request-match">
+      <span>
+        它正是{r.from}想要的「{r.goal}」
+      </span>
+      <button className="btn small" onClick={() => void engine.deliverRequest(r.id, c.id)}>
+        交出去 · ✦ {r.reward}
+      </button>
+    </div>
+  );
+}
+
+/** The partner the player matched it with, or a way to match it. */
+function Partner({ engine, c }: { engine: Engine; c: Creature }) {
+  const p = c.bondId ? engine.world.creatureMap.get(c.bondId) : undefined;
+  if (p && p.dying === 0)
+    return (
+      <>
+        <button className="link" onClick={() => engine.select(p.id)}>
+          {p.customName || p.name}
+        </button>{' '}
+        <button className="link quiet" onClick={() => engine.breakBond(c.id)}>
+          解除
+        </button>
+      </>
+    );
+  if (c.stage === 'egg' || c.dying > 0) return <span className="muted">—</span>;
+  return (
+    <button className="link" onClick={() => engine.startPairing(c.id)}>
+      为它配对…
+    </button>
   );
 }
 
