@@ -44,7 +44,7 @@ export class Input {
     this.moved = false;
     this.canvas.setPointerCapture(e.pointerId);
     clearTimeout(this.longTimer);
-    if (!this.engine.aiming && this.engine.tool !== 'none') {
+    if (!this.engine.aiming && this.engine.tool !== 'none' && this.engine.canPour()) {
       this.longTimer = window.setTimeout(() => this.startPour(), LONG_PRESS_MS);
     }
   };

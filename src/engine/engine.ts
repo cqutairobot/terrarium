@@ -9,13 +9,17 @@ import { mainTankCount, PROFILE_KEY, tankLimit, type Profile, type TankInfo } fr
 import { shownHue } from '../game/conditions';
 import { cardLimit, has } from '../game/economy';
 import { addTank, syncTankInfo, tankRecord } from '../game/tanks';
+import { FOOD_TOOLS, levelCall, levelDisaster, levelEnv, levelFeed, levelPair, levelRelease } from '../game/levels/actions';
+import { capOf, LevelRun } from '../game/levels/run';
+import { createLevelWorld } from '../game/levels/setup';
+import type { LevelDef, ToolKind } from '../game/levels/types';
 import type { StorageAdapter, SaveMeta } from '../persist/storage';
 import { downloadSnapshot, readSnapshotFile } from '../persist/exportImport';
 import { Renderer } from '../render/renderer';
 import type { EcoConfig, EnvSettings } from '../sim/config';
 import type { Creature } from '../sim/entities/creature';
-import type { FoodKind } from '../sim/entities/food';
-import type { DisasterKind } from '../sim/environment';
+import { FOOD_LABELS, type FoodKind } from '../sim/entities/food';
+import { DISASTER_LABELS, type DisasterKind } from '../sim/environment';
 import { cloneGenome, G } from '../sim/genome';
 import { emigrate, hatchGenome, immigrate } from '../sim/migration';
 import { rareTraitKeys } from '../sim/rareTraits';
@@ -59,6 +63,16 @@ export interface LumenPop {
   id: number;
   amount: number;
   reason: string;
+}
+
+/** Where a challenge stands: its story before, the attempt, the results after. */
+export type LevelPhase = 'intro' | 'playing' | 'result';
+
+/** What finishing a challenge brought. */
+export interface LevelResult {
+  /** Stars beyond the best earned before. */
+  newStars: number;
+  lumen: number;
 }
 
 /** Reviving a gene card costs a little lumen (and the egg is made of the tank's own matter). */
@@ -108,6 +122,13 @@ export class Engine {
   lumenPops: LumenPop[] = [];
   /** Pinches of food scattered this session (the tutorial watches it). */
   feeds = 0;
+  /** A challenge being played; the garden tank waits in storage (and lives on) meanwhile. */
+  level: LevelRun | null = null;
+  levelPhase: LevelPhase = 'intro';
+  levelResult: LevelResult | null = null;
+  private levelAcc = 0;
+  /** Tools the player has already been told are spent (said once per attempt). */
+  private spentSaid = new Set<string>();
   private economyAcc = 0;
   private profileDirty = false;
   private profileSaveAcc = 0;
@@ -139,7 +160,10 @@ export class Engine {
     this.uiHidden = opts.wallpaper ?? false;
     this.renderer = new Renderer(canvas, world);
     this.loop = new Loop(SIM_DT, {
-      step: (dt) => this.world.step(dt),
+      step: (dt) => {
+        this.world.step(dt);
+        if (this.level) this.tickLevel(dt);
+      },
       tick: (realDt) => {
         this.world.realTime += realDt;
         this.autosaveAcc += realDt;
@@ -148,7 +172,7 @@ export class Engine {
           this.idle(() => void this.saveActive());
         }
         this.economyAcc += realDt;
-        if (this.economyAcc >= 1) {
+        if (this.economyAcc >= 1 && !this.level) {
           this.economyAcc = 0;
           this.collectRewards();
           this.tendRequests();
@@ -166,7 +190,8 @@ export class Engine {
         }
       },
       gap: (seconds) => {
-        // the machine slept with the page open: make up for it like any absence
+        // the machine slept with the page open: make up for it like any absence (a challenge simply goes on)
+        if (this.level) return;
         this.loop.stop();
         void this.catchUpAfter(seconds * 1000);
       },
@@ -227,7 +252,9 @@ export class Engine {
       this.audio.resume();
       const away = this.hiddenAt ? Date.now() - this.hiddenAt : 0;
       this.hiddenAt = 0;
-      void this.catchUpAfter(away);
+      // a challenge waits for the player; the garden makes up for the time
+      if (this.level) this.loop.start();
+      else void this.catchUpAfter(away);
     }
   };
 
@@ -361,6 +388,7 @@ export class Engine {
   startPairing(id: number): void {
     const c = this.world.creatureMap.get(id);
     if (!c || c.dying > 0 || c.stage === 'egg') return;
+    if (!this.allowed('pair', '配对')) return;
     this.aiming = null;
     this.pairOffer = null;
     this.pairing = { firstId: id };
@@ -400,7 +428,13 @@ export class Engine {
       this.publish();
       return;
     }
-    bond(this.world, a, b);
+    if (this.level) {
+      const problem = levelPair(this.level, this.world, a, b);
+      if (problem) {
+        this.toast(problem);
+        return;
+      }
+    } else bond(this.world, a, b);
     const name = (c: Creature) => c.customName || c.name;
     this.world.history.note(a.id, 'bonded', { mate: name(b) });
     this.world.history.note(b.id, 'bonded', { mate: name(a) });
@@ -423,8 +457,17 @@ export class Engine {
 
   feedAt(x: number, y: number, count: number): void {
     if (this.tool === 'none') return;
-    this.world.feed(this.tool, x, y, count);
+    if (this.level) {
+      if (!this.allowed(FOOD_TOOLS[this.tool], FOOD_LABELS[this.tool])) return;
+      levelFeed(this.level, this.world, this.tool, x, y, count);
+      this.publish();
+    } else this.world.feed(this.tool, x, y, count);
     this.feeds++;
+  }
+
+  /** Holding the button pours food freely, except where a challenge counts every pinch. */
+  canPour(): boolean {
+    return !this.level || this.tool === 'none' || this.level.left(FOOD_TOOLS[this.tool]) === Infinity;
   }
 
   // ------------------------------------------------------------ tutorial
@@ -444,22 +487,29 @@ export class Engine {
   }
 
   aim(kind: DisasterKind | null): void {
+    if (kind && !this.allowed(`disaster:${kind}`, DISASTER_LABELS[kind])) return;
     this.aiming = kind;
     this.publish();
   }
 
   disaster(kind: DisasterKind, x?: number, y?: number): void {
-    this.world.disaster(kind, x, y);
     this.aiming = null;
+    if (this.level) {
+      if (this.allowed(`disaster:${kind}`, DISASTER_LABELS[kind])) levelDisaster(this.level, this.world, kind, x, y);
+    } else this.world.disaster(kind, x, y);
     this.publish();
   }
 
   setEnv(patch: Partial<EnvSettings>): void {
-    Object.assign(this.world.env.settings, patch);
+    if (this.level) {
+      if (!this.level.def.tools.env) this.sayOnce('env', '这一关不能调节环境');
+      else if (this.levelPhase === 'playing') levelEnv(this.level, this.world, patch);
+    } else Object.assign(this.world.env.settings, patch);
     this.publish();
   }
 
   setConfig(patch: Partial<EcoConfig>): void {
+    if (this.level) return;
     Object.assign(this.world.cfg, patch);
     this.publish();
   }
@@ -640,6 +690,7 @@ export class Engine {
 
   /** Give a matching creature to the one who asked; it leaves the tank for good. */
   async deliverRequest(id: string, cid: number): Promise<void> {
+    if (this.level) return;
     const r = this.profile.requests.open.find((x) => x.id === id);
     const c = this.world.creatureMap.get(cid);
     if (!r || !c || !candidatesFor(this.world, r).includes(c)) return;
@@ -677,6 +728,13 @@ export class Engine {
     const c = this.world.creatureMap.get(cid);
     if (!c || c.dying > 0 || this.catchUp) return;
     const name = c.customName || c.name;
+    if (this.level) {
+      if (!this.allowed('release', '放生') || !levelRelease(this.level, this.world, cid)) return;
+      if (this.renderer.selectedId === cid) this.select(0);
+      if (this.renderer.followId === cid) this.follow(0);
+      this.toast(`「${name}」游向了远方`);
+      return;
+    }
     const gift = Math.min(20, 2 + 5 * rareTraitKeys(c.ph.rare).length);
     if (!this.sendAway(cid, '远方的湖泊', 'released')) return;
     this.earn(gift, `放生了「${name}」`, true);
@@ -688,6 +746,7 @@ export class Engine {
 
   /** Keep a creature's genes on a card, to revive later in any tank (or take into a challenge). */
   saveCard(cid: number): void {
+    if (this.level) return;
     const c = this.world.creatureMap.get(cid);
     if (!c) return;
     const p = this.profile;
@@ -716,6 +775,10 @@ export class Engine {
 
   /** A gene card comes back to life as an egg in the shown tank. */
   async reviveCard(id: string): Promise<void> {
+    if (this.level) {
+      this.toast('生命卡要回到自己的水缸里才能复苏');
+      return;
+    }
     const card = this.profile.geneCards.find((x) => x.id === id);
     if (!card || this.catchUp) return;
     if (this.profile.lumen < REVIVE_PRICE) {
@@ -748,6 +811,7 @@ export class Engine {
 
   /** Buy something from the shop; goods arrive in the shown tank. */
   async buy(id: string): Promise<void> {
+    if (this.level) return;
     const item = itemById(id);
     if (!item || this.catchUp) return;
     const check = canBuy(this.profile, item);
@@ -789,7 +853,8 @@ export class Engine {
 
   /** Write the shown tank (and the profile) to storage. */
   async saveActive(): Promise<boolean> {
-    if (this.saving || this.catchUp) return false;
+    // a challenge's tank is never written over the garden
+    if (this.saving || this.catchUp || this.level) return false;
     this.saving = true;
     try {
       this.collectRewards();
@@ -809,6 +874,7 @@ export class Engine {
 
   /** 'auto' keeps the tank itself up to date; 'manual' also keeps a snapshot to return to. */
   async save(kind: 'auto' | 'manual', name?: string): Promise<boolean> {
+    if (this.level) return false;
     const ok = await this.saveActive();
     if (kind === 'auto') return ok;
     try {
@@ -836,6 +902,7 @@ export class Engine {
 
   /** Bring a snapshot back into the shown tank. */
   async load(id: string): Promise<void> {
+    if (this.level) return;
     const rec = await this.storage.get(id);
     if (!rec) {
       this.toast('找不到这个快照');
@@ -865,6 +932,7 @@ export class Engine {
 
   /** The nursery: small, calm, no predators, and empty until the player brings someone. */
   async createNursery(): Promise<void> {
+    if (this.level) return;
     if (!has(this.profile, 'nursery') || this.nursery() || this.busy) return;
     this.busy = true;
     try {
@@ -884,6 +952,7 @@ export class Engine {
 
   /** A new tank with a fresh world, shown right away. */
   async createTank(seed?: string, name?: string, from?: World): Promise<void> {
+    if (this.level) return;
     if (this.busy) return;
     if (!this.canAddTank()) {
       this.toast(`最多只能养 ${tankLimit(this.profile)} 个水缸`);
@@ -911,6 +980,7 @@ export class Engine {
 
   /** Show another tank; it makes up for the time it was not watched. */
   async switchTank(id: string): Promise<void> {
+    if (this.level) return;
     if (this.busy || this.catchUp || id === this.tankId) return;
     const info = this.profile.tanks.find((t) => t.id === id);
     if (!info) return;
@@ -938,6 +1008,7 @@ export class Engine {
   }
 
   async renameTank(id: string, name: string): Promise<void> {
+    if (this.level) return;
     const clean = name.trim().slice(0, 16);
     const info = this.profile.tanks.find((t) => t.id === id);
     if (!clean || !info) return;
@@ -966,6 +1037,7 @@ export class Engine {
 
   /** Carry a creature to another tank (it continues its life there). */
   async moveCreature(cid: number, toId: string): Promise<void> {
+    if (this.level) return;
     if (this.busy || this.catchUp || toId === this.tankId) return;
     const info = this.profile.tanks.find((t) => t.id === toId);
     const c = this.world.creatureMap.get(cid);
@@ -1012,6 +1084,7 @@ export class Engine {
 
   /** The shown tank starts over from its first day. */
   resetWorld(): void {
+    if (this.level) return;
     const w = new World({ seed: this.world.seed, aspect: this.world.width / this.world.height, name: this.world.name });
     this.setWorld(w);
     this.toast('水缸回到了它的第一天');
@@ -1019,6 +1092,7 @@ export class Engine {
   }
 
   exportWorld(): void {
+    if (this.level) return;
     const w = this.world;
     const stamp = new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-');
     downloadSnapshot(snapshotWorld(w), `浮生-${w.name}-${stamp}.json`);
@@ -1026,12 +1100,154 @@ export class Engine {
 
   /** An exported world arrives as a new tank. */
   async importWorld(file: File): Promise<void> {
+    if (this.level) return;
     try {
       const snap = await readSnapshotFile(file);
       await this.createTank(undefined, undefined, restoreWorld(snap));
     } catch (err) {
       this.toast('导入失败：' + String((err as Error)?.message ?? err));
     }
+  }
+
+  // ------------------------------------------------------------ challenges
+
+  /** The gene lens shows hidden alleles once unlocked, and always in a challenge. */
+  lens(): boolean {
+    return this.level !== null || has(this.profile, 'lens');
+  }
+
+  private sayOnce(key: string, text: string): void {
+    if (this.spentSaid.has(key)) return;
+    this.spentSaid.add(key);
+    this.toast(text);
+  }
+
+  /** In a challenge: may this tool be used now? (Says why not, once.) Always true in the garden. */
+  private allowed(tool: ToolKind, label: string): boolean {
+    const run = this.level;
+    if (!run) return true;
+    if (this.levelPhase !== 'playing') return false;
+    if (run.left(tool) > 0) return true;
+    this.sayOnce(tool, capOf(run.def, tool) === undefined ? `这一关不能用${label}` : `这一关的${label}用完了`);
+    return false;
+  }
+
+  /** Leave the garden (saved; it lives on meanwhile) for a challenge. */
+  async startLevel(def: LevelDef): Promise<void> {
+    if (this.busy || this.catchUp) return;
+    this.busy = true;
+    try {
+      if (!this.level) await this.saveActive();
+      this.openLevel(def, 'intro');
+    } finally {
+      this.busy = false;
+      this.publish();
+    }
+  }
+
+  private openLevel(def: LevelDef, phase: LevelPhase): void {
+    const w = createLevelWorld(def, window.innerWidth / Math.max(1, window.innerHeight));
+    this.pairing = null;
+    this.pairOffer = null;
+    this.select(0);
+    this.setWorld(w);
+    this.level = new LevelRun(def, w);
+    this.levelPhase = phase;
+    this.levelResult = null;
+    this.levelAcc = 0;
+    this.spentSaid.clear();
+    this.tool = def.tools.food !== undefined ? 'pellet' : 'none';
+    this.loop.timeScale = 1;
+    // the tank holds still while the story is told
+    this.loop.paused = phase === 'intro';
+    this.loop.start();
+  }
+
+  /** The intro has been read: the clock starts. */
+  beginLevel(): void {
+    if (!this.level || this.levelPhase !== 'intro') return;
+    this.levelPhase = 'playing';
+    this.loop.paused = false;
+    this.publish();
+  }
+
+  restartLevel(): void {
+    if (!this.level || this.busy) return;
+    this.openLevel(this.level.def, 'playing');
+    this.publish();
+  }
+
+  /** Back to the garden, which made up for the time it was left alone. */
+  async exitLevel(): Promise<void> {
+    if (!this.level || this.busy) return;
+    this.busy = true;
+    try {
+      this.level = null;
+      this.levelResult = null;
+      this.pairing = null;
+      this.pairOffer = null;
+      this.select(0);
+      const rec = await this.storage.get(this.tankId);
+      const info = this.tank();
+      this.setWorld(rec ? restoreWorld(rec.snapshot) : new World({ seed: info?.seed ?? randomSeed() }));
+      this.loop.timeScale = 1;
+      this.loop.paused = false;
+      this.tool = 'pellet';
+      this.busy = false;
+      await this.catchUpAfter(Date.now() - (info?.lastWall ?? Date.now()));
+    } catch (err) {
+      this.toast('回到水缸时出了点问题：' + String((err as Error)?.message ?? err));
+    } finally {
+      this.busy = false;
+      this.publish();
+    }
+  }
+
+  /** Let the level's newcomers in (a challenge tool). */
+  callNewcomers(): void {
+    const run = this.level;
+    if (!run?.def.tools.call || !this.allowed('call', run.def.tools.call.label)) return;
+    if (!levelCall(run, this.world)) this.toast('缸里已经太挤了');
+    this.publish();
+  }
+
+  /** The level's own clock, kept in simulated seconds. */
+  private tickLevel(dt: number): void {
+    const run = this.level!;
+    if (this.levelPhase !== 'playing') return;
+    this.levelAcc += dt;
+    if (this.levelAcc < 1) return;
+    this.levelAcc -= 1;
+    run.update(this.world);
+    for (const m of run.messages.splice(0)) this.toast(m);
+    if (run.status !== 'playing') this.finishLevel();
+  }
+
+  private finishLevel(): void {
+    const run = this.level!;
+    this.levelPhase = 'result';
+    this.pairing = null;
+    this.pairOffer = null;
+    this.aiming = null;
+    let newStars = 0;
+    let lumen = 0;
+    if (run.status === 'won') {
+      const key = run.def.id;
+      const prev = this.profile.levels[key];
+      const had = prev?.stars ?? 0;
+      newStars = Math.max(0, run.stars - had);
+      // a level's lumen comes a third per star, each star paid once
+      lumen = Math.round((run.def.reward.lumen * newStars) / 3);
+      const best = prev?.bestTime === undefined || run.endT < prev.bestTime;
+      this.profile.levels[key] = { stars: Math.max(had, run.stars), bestTime: best ? run.endT : prev?.bestTime, at: Date.now() };
+      const unlock = run.def.reward.unlock;
+      if (unlock && !this.profile.unlocks.includes(unlock)) this.profile.unlocks.push(unlock);
+      if (lumen > 0) this.earn(lumen, `挑战「${run.def.name}」`, true);
+      this.profileDirty = true;
+      void this.saveProfile();
+    }
+    this.levelResult = { newStars, lumen };
+    this.publish();
   }
 
   // ------------------------------------------------------------ catching up
@@ -1041,7 +1257,7 @@ export class Engine {
    * tank shown): the world runs that long in a worker, capped, skippable.
    */
   async catchUpAfter(awayMs: number): Promise<void> {
-    if (!this.prefs.offlineProgress || this.catchUp || awayMs < MIN_AWAY_MS) {
+    if (!this.prefs.offlineProgress || this.catchUp || this.level || awayMs < MIN_AWAY_MS) {
       this.loop.start();
       return;
     }

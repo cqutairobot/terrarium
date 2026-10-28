@@ -195,12 +195,24 @@ export function foundSpecies(world: World, genome: Genome): number {
   return id;
 }
 
+export interface FounderOptions {
+  /** Arrive grown up (their bodies still come out of the tank's nutrients). */
+  adult?: boolean;
+  /** Adjust each genome before the creature takes shape (rare alleles, preferences...). */
+  tweak?: (g: Genome, i: number) => void;
+  /** Gather around this x instead of spreading over the tank. */
+  near?: number;
+  /** Arrive with this share of a full belly (default 0.8). */
+  energy?: number;
+}
+
 /**
- * New life introduced from outside (the player's shop): a small group of one
- * founding body plan, as a species of its own. Their bodies are built from
- * the tank's own nutrients, so the matter ledger stays whole.
+ * New life introduced from outside (the player's shop, a level's setup): a
+ * small group of one founding body plan, as a species of its own. Their
+ * bodies are built from the tank's own nutrients, so the matter ledger
+ * stays whole.
  */
-export function introduceFounders(world: World, key: string, count: number): Creature[] {
+export function introduceFounders(world: World, key: string, count: number, opts: FounderOptions = {}): Creature[] {
   const arch = [...CONSUMER_ARCHETYPES, ...PREDATOR_ARCHETYPES].find((a) => a.key === key);
   if (!arch) return [];
   const predator = PREDATOR_ARCHETYPES.includes(arch);
@@ -210,11 +222,12 @@ export function introduceFounders(world: World, key: string, count: number): Cre
   for (let i = 0; i < count; i++) {
     const g = genomeFromTemplate(arch.template, rng, 0.035);
     g.g[G.hue] = (g.g[G.hue] + shift + 1) % 1;
+    opts.tweak?.(g, i);
     genomes.push(g);
   }
   const species = foundSpecies(world, genomes[0]);
   const before = new Set(world.creatures.map((c) => c.id));
-  for (const g of genomes) spawnFounder(world, g, species, 0, predator);
+  for (const g of genomes) spawnFounder(world, g, species, 0, predator, opts);
   return world.creatures.filter((c) => !before.has(c.id));
 }
 
@@ -232,17 +245,17 @@ export function scatterSeeds(world: World, count: number): number {
   return n;
 }
 
-function spawnFounder(world: World, genome: Genome, species: number, generation: number, predator: boolean): void {
+function spawnFounder(world: World, genome: Genome, species: number, generation: number, predator: boolean, opts: FounderOptions = {}): void {
   const rng = world.rng;
   const id = world.newId();
-  const x = rng.range(80, world.width - 80);
+  const x = opts.near !== undefined ? clamp(opts.near + rng.range(-120, 120), 60, world.width - 60) : rng.range(80, world.width - 80);
   const y = clamp(rng.range(predator ? 200 : 120, world.groundAt(x) - 80), 60, world.groundAt(x) - 40);
   const c = createCreature({ id, genome, x, y, time: world.time, rng, speciesId: species, familyId: id, generation, age: 0, energyFraction: 0.8 });
-  // revived life starts young but able
-  c.age = c.ph.maturityAge * rng.range(0.4, 0.9);
+  // revived life starts young but able (or grown, when asked)
+  c.age = c.ph.maturityAge * (opts.adult ? rng.range(1.05, 1.6) : rng.range(0.4, 0.9));
   c.growth = Math.min(1, 0.45 + 0.55 * Math.pow(Math.min(1, c.age / c.ph.maturityAge), 0.7));
   c.structure = c.ph.adultStructure * c.growth * c.growth;
-  c.energy = c.ph.maxEnergy * c.growth * c.growth * 0.8;
+  c.energy = c.ph.maxEnergy * c.growth * c.growth * (opts.energy ?? 0.8);
   c.health = c.ph.maxHealth;
   // the revived matter comes out of the sediment, keeping the ledger whole
   const need = c.structure + c.energy;
@@ -251,7 +264,8 @@ function spawnFounder(world: World, genome: Genome, species: number, generation:
   const scale = Math.min(1, got / Math.max(1e-6, need));
   c.structure *= scale;
   c.energy *= scale;
-  c.bornT = world.time;
+  c.bornT = world.time - (opts.adult ? c.age : 0);
+  if (opts.adult && c.growth > 0.88) c.stage = 'adult';
   world.addCreature(c);
   world.families.set(id, {
     id,

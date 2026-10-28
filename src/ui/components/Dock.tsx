@@ -1,9 +1,12 @@
 import type { ReactNode } from 'react';
 import type { Engine, FoodTool } from '../../engine/engine';
 import type { DisasterKind } from '../../sim/environment';
+import { FOOD_TOOLS } from '../../game/levels/actions';
+import { capOf } from '../../game/levels/run';
 import { Icon } from '../icons';
+import { toolBadge } from './Levels';
 
-export type PanelId = 'env' | 'stats' | 'log' | 'chronicle' | 'archive' | 'codex' | 'requests' | 'shop' | 'world';
+export type PanelId = 'env' | 'stats' | 'log' | 'chronicle' | 'archive' | 'codex' | 'requests' | 'shop' | 'levels' | 'world';
 
 interface Props {
   engine: Engine;
@@ -46,36 +49,62 @@ const PANELS: [PanelId, string, () => ReactNode][] = [
   ['codex', '生命图鉴', Icon.codex],
   ['requests', '委托', Icon.requests],
   ['shop', '灵光商店', Icon.shop],
+  ['levels', '生态挑战', Icon.levels],
 ];
+
+/** Panels about the garden's own life, not shown inside a challenge. */
+const GARDEN_ONLY = new Set<PanelId>(['requests', 'shop', 'levels', 'world']);
 
 /** The floating control dock that rises from the bottom edge. */
 export function Dock({ engine, visible, panel, setPanel, onHide, onFullscreen, onHover, extra }: Props) {
   const active = new Set(engine.world.env.events.filter((e) => !e.done).map((e) => e.kind));
   const toggle = (p: PanelId) => setPanel(panel === p ? null : p);
   const loop = engine.loop;
+  const level = engine.level;
+  // inside a challenge only the level's own tools are offered, with their uses left
+  const tools = TOOLS.filter(([t]) => !level || t === 'none' || capOf(level.def, FOOD_TOOLS[t]) !== undefined);
+  const disasters = DISASTERS.filter(([k]) => !level || capOf(level.def, `disaster:${k}`) !== undefined);
+  const call = level?.def.tools.call;
+  const panels = PANELS.filter(([p]) => !level || !GARDEN_ONLY.has(p));
   return (
     <div className={`dock glass ${visible ? 'is-visible' : ''}`} onMouseEnter={() => onHover(true)} onMouseLeave={() => onHover(false)}>
       <div className="dock-group">
-        {TOOLS.map(([t, label, I]) => (
-          <button key={t} className={`dock-btn ${engine.tool === t ? 'on' : ''}`} data-tip={label} aria-label={label} onClick={() => engine.setTool(t)}>
-            <I />
-          </button>
-        ))}
+        {tools.map(([t, label, I]) => {
+          const badge = t === 'none' ? null : toolBadge(engine, FOOD_TOOLS[t]);
+          return (
+            <button key={t} className={`dock-btn ${engine.tool === t ? 'on' : ''}`} data-tip={label} aria-label={label} onClick={() => engine.setTool(t)}>
+              <I />
+              {badge !== null && <span className="dock-badge">{badge}</span>}
+            </button>
+          );
+        })}
       </div>
-      <i className="dock-sep" />
-      <div className="dock-group">
-        {DISASTERS.map(([k, label, I]) => (
-          <button
-            key={k}
-            className={`dock-btn ${active.has(k) || engine.aiming === k ? 'on warm' : ''}`}
-            data-tip={label}
-            aria-label={label}
-            onClick={() => (k === 'meteor' ? engine.aim(engine.aiming === 'meteor' ? null : 'meteor') : engine.disaster(k))}
-          >
-            <I />
-          </button>
-        ))}
-      </div>
+      {(disasters.length > 0 || call) && <i className="dock-sep" />}
+      {(disasters.length > 0 || call) && (
+        <div className="dock-group">
+          {disasters.map(([k, label, I]) => {
+            const badge = toolBadge(engine, `disaster:${k}`);
+            return (
+              <button
+                key={k}
+                className={`dock-btn ${active.has(k) || engine.aiming === k ? 'on warm' : ''}`}
+                data-tip={label}
+                aria-label={label}
+                onClick={() => (k === 'meteor' ? engine.aim(engine.aiming === 'meteor' ? null : 'meteor') : engine.disaster(k))}
+              >
+                <I />
+                {badge !== null && <span className="dock-badge">{badge}</span>}
+              </button>
+            );
+          })}
+          {call && (
+            <button className="dock-btn" data-tip={call.label} aria-label={call.label} onClick={() => engine.callNewcomers()}>
+              <Icon.plus />
+              <span className="dock-badge">{toolBadge(engine, 'call')}</span>
+            </button>
+          )}
+        </div>
+      )}
       <i className="dock-sep" />
       <div className="dock-group">
         <button className={`dock-btn ${loop.paused ? 'on' : ''}`} data-tip={loop.paused ? '继续' : '暂停'} aria-label="暂停" onClick={() => engine.togglePause()}>
@@ -89,18 +118,22 @@ export function Dock({ engine, visible, panel, setPanel, onHide, onFullscreen, o
       </div>
       <i className="dock-sep" />
       <div className="dock-group">
-        <button className={`dock-btn ${panel === 'env' ? 'on' : ''}`} data-tip="环境" aria-label="环境" onClick={() => toggle('env')}>
-          <Icon.sliders />
-        </button>
-        {PANELS.map(([p, label, I]) => (
+        {(!level || level.def.tools.env) && (
+          <button className={`dock-btn ${panel === 'env' ? 'on' : ''}`} data-tip="环境" aria-label="环境" onClick={() => toggle('env')}>
+            <Icon.sliders />
+          </button>
+        )}
+        {panels.map(([p, label, I]) => (
           <button key={p} className={`dock-btn ${panel === p ? 'on' : ''}`} data-tip={label} aria-label={label} onClick={() => toggle(p)}>
             <I />
           </button>
         ))}
         {extra}
-        <button className={`dock-btn ${panel === 'world' ? 'on' : ''}`} data-tip="世界、存档与设置" aria-label="世界与设置" onClick={() => toggle('world')}>
-          <Icon.world />
-        </button>
+        {!level && (
+          <button className={`dock-btn ${panel === 'world' ? 'on' : ''}`} data-tip="世界、存档与设置" aria-label="世界与设置" onClick={() => toggle('world')}>
+            <Icon.world />
+          </button>
+        )}
       </div>
       <i className="dock-sep" />
       <div className="dock-group">

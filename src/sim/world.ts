@@ -469,16 +469,18 @@ export class World {
   private populate(lifeless: boolean): void {
     const rng = this.rng.fork('genesis');
     this.populateProducers(rng);
-    if (lifeless) return;
-    const consumerA = rng.int(CONSUMER_ARCHETYPES.length);
-    let consumerB = rng.int(CONSUMER_ARCHETYPES.length - 1);
-    if (consumerB >= consumerA) consumerB++;
-    const predator = rng.int(PREDATOR_ARCHETYPES.length);
-    const hueShift = rng.range(-0.08, 0.08);
-    this.foundSpecies(CONSUMER_ARCHETYPES[consumerA], rng, hueShift, false);
-    this.foundSpecies(CONSUMER_ARCHETYPES[consumerB], rng, hueShift, false);
-    this.foundSpecies(PREDATOR_ARCHETYPES[predator], rng, hueShift * 0.5, true);
+    if (!lifeless) {
+      const consumerA = rng.int(CONSUMER_ARCHETYPES.length);
+      let consumerB = rng.int(CONSUMER_ARCHETYPES.length - 1);
+      if (consumerB >= consumerA) consumerB++;
+      const predator = rng.int(PREDATOR_ARCHETYPES.length);
+      const hueShift = rng.range(-0.08, 0.08);
+      this.foundSpecies(CONSUMER_ARCHETYPES[consumerA], rng, hueShift, false);
+      this.foundSpecies(CONSUMER_ARCHETYPES[consumerB], rng, hueShift, false);
+      this.foundSpecies(PREDATOR_ARCHETYPES[predator], rng, hueShift * 0.5, true);
+    }
     // dissolved nutrients make up the rest of the target matter, richer toward the floor
+    // (an empty tank too: whoever is brought in later is built from them)
     const free = Math.max(0, this.matterTarget() - this.livingBiomass());
     const env = this.env;
     let weightSum = 0;

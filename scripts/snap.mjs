@@ -315,6 +315,82 @@ try {
       console.log(`[${size}] after reload: ${JSON.stringify(reloaded)}`);
       await shot('reloaded');
     }
+    if (scenario === 'levels') {
+      // step 3: the challenge map, a level from intro to result, the next level, back to the garden
+      const shot = async (name) => {
+        await page.waitForTimeout(600);
+        await page.screenshot({ path: `${out}/${size}-${name}.png` });
+      };
+      const garden = await page.evaluate(() => {
+        const e = window.__eden;
+        e.skipTutorial();
+        return { name: e.world.name, seed: e.world.seed, creatures: e.world.creatures.length, lumen: e.profile.lumen };
+      });
+      await page.mouse.move(w / 2, h - 12);
+      await page.waitForTimeout(900);
+      await page.getByRole('button', { name: '生态挑战' }).click();
+      await shot('levels-panel');
+      await page.locator('.level-row', { hasText: '饥饿的小鱼' }).click();
+      await page.waitForTimeout(1200);
+      await shot('level-intro');
+      await page.getByRole('button', { name: '开始', exact: true }).click();
+      await page.waitForTimeout(500);
+      // a few pinches of food by hand, through the real pointer path
+      for (let i = 0; i < 3; i++) {
+        await page.mouse.click(w * (0.3 + i * 0.15), h * 0.35);
+        await page.waitForTimeout(250);
+      }
+      await page.mouse.move(w / 2, h - 12);
+      await shot('level-hud');
+      const mid = await page.evaluate(() => {
+        const e = window.__eden;
+        return { phase: e.levelPhase, food: e.level.left('food'), used: e.level.used, tools: [...document.querySelectorAll('.dock-btn')].length };
+      });
+      console.log(`[${size}] level 1-1 playing: ${JSON.stringify(mid)}`);
+      // play the rest of the level quickly: the world steps here, feeding the hungriest every 14 s
+      const result = await page.evaluate(() => {
+        const e = window.__eden;
+        let t = 0;
+        let turn = 0;
+        while (e.levelPhase === 'playing' && t < 400) {
+          for (let i = 0; i < 30; i++) {
+            e.world.step(1 / 30);
+            e['tickLevel'](1 / 30);
+          }
+          t++;
+          if (t % 14 === 0) {
+            const hungry = e.world.creatures.filter((c) => c.dying === 0 && c.stage !== 'egg').sort((a, b) => a.energy / a.ph.maxEnergy - b.energy / b.ph.maxEnergy);
+            const c = hungry[turn++ % Math.min(3, hungry.length)];
+            if (c) e.feedAt(c.x, Math.max(30, c.y - 30), 5);
+          }
+        }
+        const r = e.level;
+        return { phase: e.levelPhase, status: r.status, stars: r.stars, endT: Math.round(r.endT), result: e.levelResult, record: e.profile.levels['1-1'], lumen: e.profile.lumen };
+      });
+      console.log(`[${size}] level 1-1 result: ${JSON.stringify(result)}`);
+      await shot('level-result');
+      const next = page.getByRole('button', { name: '下一关' });
+      if (await next.count()) {
+        await next.click();
+        await shot('level-next-intro');
+        console.log(`[${size}] next level: ${await page.evaluate(() => window.__eden.level?.def.id)}`);
+      }
+      await page.getByRole('button', { name: '返回水缸' }).click();
+      await page.waitForTimeout(1500);
+      const back = await page.evaluate(() => {
+        const e = window.__eden;
+        return { level: !!e.level, name: e.world.name, seed: e.world.seed, creatures: e.world.creatures.length, lumen: e.profile.lumen };
+      });
+      console.log(`[${size}] back in the garden: ${JSON.stringify(back)} (left: ${JSON.stringify(garden)})`);
+      await shot('garden-again');
+      await page.reload();
+      await page.waitForTimeout(2500);
+      const reloaded = await page.evaluate(() => {
+        const e = window.__eden;
+        return { level: !!e.level, seed: e.world.seed, record: e.profile.levels['1-1'] };
+      });
+      console.log(`[${size}] after reload: ${JSON.stringify(reloaded)}`);
+    }
     if (scenario === 'companion') {
       // desktop-companion behaviour: auto quality, settings, sound, still pointer, wallpaper mode
       await page.mouse.move(w / 2, h / 2);

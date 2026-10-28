@@ -5,7 +5,7 @@ import { celsius } from '../../sim/config';
 import { STATE_LABELS, type Creature } from '../../sim/entities/creature';
 import { GENE_DEFS } from '../../sim/genome';
 import { matchesSpec } from '../../game/conditions';
-import { has } from '../../game/economy';
+import { capOf } from '../../game/levels/run';
 import { displayName } from '../../sim/history/stories';
 import { alleleCount, RARE_DEFS, rareKeyLabel, rareTraitKeys } from '../../sim/rareTraits';
 import { familyDepth } from '../../sim/registry';
@@ -31,7 +31,8 @@ export function CreatureCard({ engine, c, openStory }: { engine: Engine; c: Crea
   const [draft, setDraft] = useState('');
   const [moving, setMoving] = useState(false);
   const open = useRef(false);
-  const otherTanks = engine.profile.tanks.filter((t) => t.id !== engine.tankId);
+  // a challenge's creatures stay in the challenge
+  const otherTanks = engine.level ? [] : engine.profile.tanks.filter((t) => t.id !== engine.tankId);
   useEffect(() => {
     open.current = false;
     setEditing(false);
@@ -146,7 +147,9 @@ function NowTab({ engine, c }: { engine: Engine; c: Creature }) {
   const health = egg ? 1 : c.health / Math.max(1e-6, healthMax(c));
   const rare = rareTraitKeys(ph.rare);
   // hidden alleles are only seen through the gene lens
-  const carried = has(engine.profile, 'lens') ? RARE_DEFS.map((d, i) => ({ d, n: alleleCount(c.genome.rare, i) })).filter((x) => x.n > 0) : [];
+  const carried = engine.lens() ? RARE_DEFS.map((d, i) => ({ d, n: alleleCount(c.genome.rare, i) })).filter((x) => x.n > 0) : [];
+  const level = engine.level;
+  const releases = level ? capOf(level.def, 'release') : null;
   return (
     <>
       <div className="chips">
@@ -189,14 +192,16 @@ function NowTab({ engine, c }: { engine: Engine; c: Creature }) {
         <Trait label="繁殖冷却" value={`${Math.round(ph.reproCooldown)}秒`} />
         <Trait label="适温" value={`${celsius(ph.thermalPref).toFixed(0)}°C`} />
       </div>
-      {c.dying === 0 && (
+      {c.dying === 0 && (!level || (releases !== undefined && !egg)) && (
         <div className="btn-row card-tools">
-          <button className="btn small ghost" onClick={() => engine.saveCard(c.id)}>
-            存为生命卡
-          </button>
-          {!egg && (
-            <button className="btn small ghost" onClick={() => void engine.release(c.id)}>
-              放生
+          {!level && (
+            <button className="btn small ghost" onClick={() => engine.saveCard(c.id)}>
+              存为生命卡
+            </button>
+          )}
+          {!egg && (!level || releases !== undefined) && (
+            <button className="btn small ghost" onClick={() => void engine.release(c.id)} disabled={!!level && level.left('release') <= 0}>
+              放生{level ? `（还剩 ${level.left('release')} 次）` : ''}
             </button>
           )}
         </div>
@@ -232,6 +237,7 @@ function NowTab({ engine, c }: { engine: Engine; c: Creature }) {
 
 /** This creature is just what someone asked for. */
 function RequestMatch({ engine, c }: { engine: Engine; c: Creature }) {
+  if (engine.level) return null;
   const r = engine.profile.requests.open.find((x) => x.kind === 'deliver' && x.spec && matchesSpec(c, x.spec));
   if (!r) return null;
   return (
@@ -261,9 +267,11 @@ function Partner({ engine, c }: { engine: Engine; c: Creature }) {
       </>
     );
   if (c.stage === 'egg' || c.dying > 0) return <span className="muted">—</span>;
+  const level = engine.level;
+  if (level && capOf(level.def, 'pair') === undefined) return <span className="muted">—</span>;
   return (
-    <button className="link" onClick={() => engine.startPairing(c.id)}>
-      为它配对…
+    <button className="link" onClick={() => engine.startPairing(c.id)} disabled={!!level && level.left('pair') <= 0}>
+      为它配对…{level ? `（还剩 ${level.left('pair')} 次）` : ''}
     </button>
   );
 }

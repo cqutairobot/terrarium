@@ -17,6 +17,7 @@ import { StatsPanel } from './components/StatsPanel';
 import { TopBar } from './components/TopBar';
 import { Tutorial } from './components/Tutorial';
 import { WorldPanel } from './components/WorldPanel';
+import { LevelHud, LevelIntro, LevelResultCard, LevelsPanel } from './components/Levels';
 import { Icon } from './icons';
 import { useEngineVersion } from './useEngine';
 
@@ -58,6 +59,17 @@ export function App({ engine, wallpaper }: { engine: Engine; wallpaper: boolean 
   const [still, setStill] = useState(false);
   const [showTitle, setShowTitle] = useState(!wallpaper);
   const [storyFocus, setStoryFocus] = useState<number | null>(null);
+  const [resultHidden, setResultHidden] = useState(false);
+  const level = engine.level;
+  const phase = engine.levelPhase;
+  // a fresh result is always shown; "看看水缸" tucks it away until the next one
+  useEffect(() => {
+    if (phase !== 'result') setResultHidden(false);
+  }, [phase, level]);
+  // panels that belong to the garden close when a challenge begins
+  useEffect(() => {
+    if (level) setPanel((p) => (p === 'requests' || p === 'shop' || p === 'levels' || p === 'world' ? null : p));
+  }, [level]);
   const openStory = useCallback((id: number) => {
     setStoryFocus(id);
     setPanel('archive');
@@ -159,6 +171,7 @@ export function App({ engine, wallpaper }: { engine: Engine; wallpaper: boolean 
     codex: ['生命图鉴', <CodexPanel engine={engine} />],
     requests: ['委托', <RequestsPanel engine={engine} />],
     shop: ['灵光商店', <ShopPanel engine={engine} />],
+    levels: ['生态挑战', <LevelsPanel engine={engine} />],
   };
   const open = panel && panel !== 'env' ? drawer[panel] : null;
 
@@ -169,7 +182,7 @@ export function App({ engine, wallpaper }: { engine: Engine; wallpaper: boolean 
         <div className="eden-title-sub">{engine.world.name}</div>
       </div>
 
-      {!hidden && <TopBar engine={engine} />}
+      {!hidden && (level ? <LevelHud engine={engine} /> : <TopBar engine={engine} />)}
 
       {!hidden && selected && <CreatureCard engine={engine} c={selected} openStory={openStory} />}
 
@@ -201,7 +214,9 @@ export function App({ engine, wallpaper }: { engine: Engine; wallpaper: boolean 
       {!hidden && engine.aiming === 'meteor' && <div className="aim-hint glass">点击水中，选择流星坠落的地方 · 右键或 Esc 取消</div>}
 
       {!hidden && captions && <Captions engine={engine} />}
-      {!hidden && !engine.catchUp && !engine.away && <Tutorial engine={engine} panel={panel} />}
+      {!hidden && !engine.catchUp && !engine.away && !level && <Tutorial engine={engine} panel={panel} />}
+      {level && phase === 'intro' && <LevelIntro engine={engine} />}
+      {level && phase === 'result' && !resultHidden && <LevelResultCard engine={engine} onHide={() => setResultHidden(true)} />}
 
       {engine.catchUp && <CatchUpOverlay engine={engine} />}
       {!engine.catchUp && engine.away && !hidden && <AwayCard engine={engine} />}

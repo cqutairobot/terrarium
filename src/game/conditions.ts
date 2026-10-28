@@ -111,9 +111,13 @@ export type Condition =
   /** Species with living members. */
   | { k: 'species'; min: number }
   /** Living creatures that fit a description. */
-  | { k: 'matching'; spec: CreatureSpec; min: number }
+  | { k: 'matching'; spec: CreatureSpec; min?: number; max?: number }
   /** Living creatures that show a rare trait. */
-  | { k: 'rare'; key: string; min: number }
+  | { k: 'rare'; key: string; min?: number; max?: number }
+  /** Share of the small life (predators aside) that fits a description, 0–1. */
+  | { k: 'share'; spec: CreatureSpec; min: number }
+  /** None of a kind is left, not even an egg. */
+  | { k: 'extinct'; who: 'consumer' | 'predator' | 'all' }
   /** The highest generation the tank has reached. */
   | { k: 'generation'; min: number }
   /** The deepest a watched bloodline has gone (generations of descendants). */
@@ -187,9 +191,18 @@ export function evaluate(world: World, cond: Condition, tracker: Tracker = newTr
       return bounded(ids.size, cond.min);
     }
     case 'matching':
-      return bounded(living(world).filter((c) => matchesSpec(c, cond.spec)).length, cond.min);
+      return bounded(living(world).filter((c) => matchesSpec(c, cond.spec)).length, cond.min, cond.max);
     case 'rare':
-      return bounded(living(world).filter((c) => rareTraitKeys(c.ph.rare).includes(cond.key)).length, cond.min);
+      return bounded(living(world).filter((c) => rareTraitKeys(c.ph.rare).includes(cond.key)).length, cond.min, cond.max);
+    case 'share': {
+      const small = living(world).filter((c) => c.ph.trophic !== 'carnivore');
+      const share = small.length ? small.filter((c) => matchesSpec(c, cond.spec)).length / small.length : 0;
+      return bounded(share, cond.min);
+    }
+    case 'extinct': {
+      const left = world.creatures.filter((c) => c.dying === 0 && (cond.who === 'all' || (cond.who === 'predator') === (c.ph.trophic === 'carnivore'))).length;
+      return { met: left === 0, progress: left === 0 ? 1 : 0, value: left };
+    }
     case 'generation':
       return bounded(world.counters.generationsMax, cond.min);
     case 'bloodline': {
@@ -272,9 +285,15 @@ export function describeCondition(cond: Condition): string {
     case 'species':
       return `让 ${cond.min} 个族群同时生活在缸里`;
     case 'matching':
+      if (cond.min === undefined) return `让${describeSpec(cond.spec)}不超过 ${cond.max ?? 0} 只`;
       return `让 ${cond.min} 只${describeSpec(cond.spec)}同时在世`;
     case 'rare':
+      if (cond.min === undefined) return `让拥有「${rareKeyLabel(cond.key)}」的生命不超过 ${cond.max ?? 0} 只`;
       return `让 ${cond.min} 只拥有「${rareKeyLabel(cond.key)}」的生命同时在世`;
+    case 'share':
+      return `让${describeSpec(cond.spec)}占全部小生命的 ${Math.round(cond.min * 100)}% 以上`;
+    case 'extinct':
+      return `${WHO_WORDS[cond.who]}全部消失（连卵也没有了）`;
     case 'generation':
       return `繁衍到第 ${cond.min} 代`;
     case 'bloodline':

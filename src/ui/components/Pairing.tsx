@@ -1,6 +1,5 @@
 import type { Engine } from '../../engine/engine';
 import { MEASURES } from '../../game/conditions';
-import { has } from '../../game/economy';
 import { hsl } from '../../render/color';
 import { pct } from '../format';
 import { Portrait } from './Portrait';
@@ -26,7 +25,7 @@ export function PairOfferCard({ engine }: { engine: Engine }) {
   const b = engine.world.creatureMap.get(o.b);
   if (!a || !b) return null;
   const f = o.forecast;
-  const lens = has(engine.profile, 'lens');
+  const lens = engine.lens();
   const name = (c: typeof a) => c.customName || c.name;
   return (
     <div className="veil soft" onClick={() => engine.cancelPairing()}>

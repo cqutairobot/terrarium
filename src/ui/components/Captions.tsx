@@ -12,11 +12,13 @@ export function Captions({ engine }: { engine: Engine }) {
   const [visible, setVisible] = useState(false);
   const world = engine.world;
 
-  // a different world (load/new) starts from its latest entry
+  // a different world (load/new/challenge) starts from its latest entry, and the old words fade
   useEffect(() => {
     const last = world.history.log.last();
     lastId.current = last ? last.id : 0;
     queue.current = [];
+    setCurrent(null);
+    setVisible(false);
   }, [world]);
 
   // collect new notable events (runs on every engine publish)
