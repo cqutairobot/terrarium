@@ -1,4 +1,5 @@
 import type { Genome } from '../sim/genome';
+import { newCollection, type Collection } from './collection';
 import { newBoard, type RequestBoard } from './requests';
 
 /** What a tank is for. A nursery is small and has no predators. */
@@ -54,8 +55,13 @@ export interface Profile {
   requests: RequestBoard;
   tutorial: { step: number; done: boolean };
   levels: Record<string, { stars: number; bestTime?: number; at?: number }>;
+  /** Achievements unlocked, by id: when (wall clock). */
   achievements: Record<string, number>;
   flags: Record<string, number>;
+  /** Running counts of what the player has done (feeds, pairs, releases...). */
+  stats: Record<string, number>;
+  /** Everything met across all tanks. */
+  collection: Collection;
 }
 
 export const PROFILE_KEY = 'profile';
@@ -81,6 +87,8 @@ export function newProfile(now: number): Profile {
     levels: {},
     achievements: {},
     flags: {},
+    stats: {},
+    collection: newCollection(),
   };
 }
 
@@ -96,6 +104,19 @@ export function normalizeProfile(raw: Partial<Profile> | undefined, now: number)
   p.requests = raw.requests && Array.isArray(raw.requests.open) ? { ...newBoard(), ...raw.requests } : newBoard();
   p.achievements = { ...(raw.achievements ?? {}) };
   p.flags = { ...(raw.flags ?? {}) };
+  p.stats = { ...(raw.stats ?? {}) };
+  const col = raw.collection;
+  p.collection = {
+    rare: { ...(col?.rare ?? {}) },
+    forms: { ...(col?.forms ?? {}) },
+    waters: { ...(col?.waters ?? {}) },
+    species: Array.isArray(col?.species) ? col.species.slice() : [],
+  };
+  // wonders found before the collection existed are remembered by their flags
+  for (const f of Object.keys(p.flags)) {
+    const key = f.startsWith('rare:') ? f.slice(5) : '';
+    if (key && !p.collection.rare[key]) p.collection.rare[key] = { name: '', tank: '', at: 0 };
+  }
   if (!p.tanks.some((t) => t.id === p.activeTank)) p.activeTank = p.tanks[0]?.id ?? '';
   const highest = p.tanks.reduce((m, t) => Math.max(m, Number(t.id.replace(/\D/g, '')) || 0), 0);
   p.nextTankNo = Math.max(p.nextTankNo || 1, highest + 1);

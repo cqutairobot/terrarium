@@ -4,11 +4,14 @@ import { bond, forecastBrood, pairProblem, unbond, type BroodForecast } from '..
 import { canBuy, itemById, priceOf, rewardFor, vitalityPerMinute } from '../game/economy';
 import { candidatesFor, closeRequest, ecologyStatus, refreshBoard } from '../game/requests';
 import { TUTORIAL } from '../game/tutorial';
+import type { StoryEvent } from '../sim/history/narrator';
 import { pushStory } from '../sim/history/stories';
 import { mainTankCount, PROFILE_KEY, tankLimit, type Profile, type TankInfo } from '../game/profile';
 import { shownHue } from '../game/conditions';
 import { cardLimit, has } from '../game/economy';
 import { addTank, syncTankInfo, tankRecord } from '../game/tanks';
+import { newlyEarned } from '../game/achievements';
+import { recordRare, recordTank } from '../game/collection';
 import { FOOD_TOOLS, levelCall, levelDisaster, levelEnv, levelFeed, levelPair, levelRelease } from '../game/levels/actions';
 import { capOf, LevelRun } from '../game/levels/run';
 import { createLevelWorld } from '../game/levels/setup';
@@ -20,7 +23,7 @@ import type { EcoConfig, EnvSettings } from '../sim/config';
 import type { Creature } from '../sim/entities/creature';
 import { FOOD_LABELS, type FoodKind } from '../sim/entities/food';
 import { DISASTER_LABELS, type DisasterKind } from '../sim/environment';
-import { cloneGenome, G } from '../sim/genome';
+import { cloneGenome, G, type Genome } from '../sim/genome';
 import { FORM_ARCHETYPES } from '../sim/archetypes';
 import type { BiomeId } from '../sim/biomes';
 import { MAX_DECOR, placeDecor, removeDecor, type DecorKind } from '../sim/decor';
@@ -78,6 +81,19 @@ export interface LevelResult {
   lumen: number;
 }
 
+/** A wonder seen for the first time: the camera goes to it and time slows for a moment. */
+export interface Spotlight {
+  id: number;
+  key: string;
+  trait: string;
+  name: string;
+  genome: Genome;
+}
+
+/** How slow time runs, and for how long, when a wonder is first seen. */
+const SPOTLIGHT_SCALE = 0.35;
+const SPOTLIGHT_MS = 4000;
+
 /** Reviving a gene card costs a little lumen (and the egg is made of the tank's own matter). */
 export const REVIVE_PRICE = 15;
 
@@ -125,6 +141,8 @@ export class Engine {
   lumenPops: LumenPop[] = [];
   /** Pinches of food scattered this session (the tutorial watches it). */
   feeds = 0;
+  spotlight: Spotlight | null = null;
+  private spotlightTimer = 0;
   /** Something bought that waits to be set down (shop item id; the next click on the floor places it). */
   placing: string | null = null;
   /** A challenge being played; the garden tank waits in storage (and lives on) meanwhile. */
@@ -135,6 +153,8 @@ export class Engine {
   /** Tools the player has already been told are spent (said once per attempt). */
   private spentSaid = new Set<string>();
   private economyAcc = 0;
+  /** Seconds since the collection and achievements were last looked at. */
+  private collectAcc = 0;
   private profileDirty = false;
   private profileSaveAcc = 0;
   prefs: Prefs;
@@ -181,6 +201,12 @@ export class Engine {
           this.economyAcc = 0;
           this.collectRewards();
           this.tendRequests();
+          this.collectAcc++;
+          if (this.collectAcc >= 5) {
+            this.collectAcc = 0;
+            if (recordTank(this.profile, this.world, Date.now())) this.profileDirty = true;
+            this.checkAchievements();
+          }
         }
         // lumen is precious: write the profile soon after it changes
         this.profileSaveAcc += realDt;
@@ -362,6 +388,7 @@ export class Engine {
     const c = this.world.creatureMap.get(id);
     if (!c || c.dying > 0) return;
     const s = this.world.history.watch(c);
+    this.count('watched');
     this.toast(`开始关注「${s.custom || s.name}」，它的一生会被记下来`);
   }
 
@@ -375,6 +402,7 @@ export class Engine {
     if (!c) return;
     const was = this.world.history.isWatched(id);
     this.world.history.rename(c, name);
+    if (!was) this.count('watched');
     const now = c.customName || c.name;
     this.toast(was ? `它现在叫「${now}」了` : `它现在叫「${now}」了，你也开始关注它的一生`);
   }
@@ -440,6 +468,7 @@ export class Engine {
         return;
       }
     } else bond(this.world, a, b);
+    this.count('pairs');
     const name = (c: Creature) => c.customName || c.name;
     this.world.history.note(a.id, 'bonded', { mate: name(b) });
     this.world.history.note(b.id, 'bonded', { mate: name(a) });
@@ -468,6 +497,7 @@ export class Engine {
       this.publish();
     } else this.world.feed(this.tool, x, y, count);
     this.feeds++;
+    this.count('feeds');
   }
 
   /** Holding the button pours food freely, except where a challenge counts every pinch. */
@@ -647,8 +677,14 @@ export class Engine {
     let total = 0;
     let count = 0;
     for (let i = chron.length - 1; i >= 0 && chron[i].id > info.seenEvent; i--) {
-      const r = rewardFor(chron[i], this.profile);
+      const e = chron[i];
+      if (e.k === 'speciation') this.count('speciation');
+      else if (e.k === 'rareSpread') this.count('spread');
+      else if (e.k === 'rareFirst') recordRare(this.profile, String(e.p.key ?? ''), String(e.p.name ?? ''), w.name, Date.now());
+      const r = rewardFor(e, this.profile);
       if (!r) continue;
+      // the first time a wonder is ever seen, it gets a moment of its own
+      if (r.flag?.startsWith('rare:') && !quietSummary && !this.spotlight) this.celebrate(chron[i]);
       if (r.flag) this.profile.flags[r.flag] = 1;
       if (quietSummary) {
         total += r.amount;
@@ -664,6 +700,55 @@ export class Engine {
     if (quietSummary) total += whole;
     else if (whole > 0) this.earn(whole, '水缸里生机勃勃', true);
     if (quietSummary && total > 0) this.earn(total, count > 0 ? `你不在时的 ${count} 个发现与水缸的生机` : '你不在时水缸的生机');
+  }
+
+  // ------------------------------------------------------------ achievements
+
+  /** Count something the player did (achievements look at these). */
+  private count(stat: string): void {
+    this.profile.stats[stat] = (this.profile.stats[stat] ?? 0) + 1;
+    this.profileDirty = true;
+  }
+
+  /** Notice achievements just earned: say so, and give their lumen. */
+  checkAchievements(): void {
+    const earned = newlyEarned({ profile: this.profile, world: this.level ? null : this.world });
+    for (const a of earned) {
+      this.profile.achievements[a.id] = Date.now();
+      this.earn(a.reward, `成就「${a.name}」`, true);
+      this.toast(`成就达成「${a.name}」 · +${a.reward} 灵光`);
+    }
+    if (earned.length) {
+      this.audio.cue('unlock');
+      this.profileDirty = true;
+    }
+  }
+
+  // ------------------------------------------------------------ wonders
+
+  /** Slow time, follow the newborn, and show what was found. */
+  private celebrate(e: StoryEvent): void {
+    const c = this.world.creatureMap.get(Number(e.p.id));
+    if (!c || c.dying > 0 || this.level || this.catchUp) return;
+    this.spotlight = { id: c.id, key: String(e.p.key ?? ''), trait: String(e.p.trait ?? ''), name: c.customName || c.name, genome: cloneGenome(c.genome) };
+    this.follow(c.id);
+    const before = this.loop.timeScale;
+    if (before > SPOTLIGHT_SCALE) {
+      this.loop.timeScale = SPOTLIGHT_SCALE;
+      clearTimeout(this.spotlightTimer);
+      this.spotlightTimer = window.setTimeout(() => {
+        // unless the player chose a speed meanwhile
+        if (this.loop.timeScale === SPOTLIGHT_SCALE) this.loop.timeScale = before;
+        this.publish();
+      }, SPOTLIGHT_MS);
+    }
+    this.audio.cue('discovery');
+    this.publish();
+  }
+
+  dismissSpotlight(): void {
+    this.spotlight = null;
+    this.publish();
   }
 
   // ------------------------------------------------------------ requests
@@ -688,6 +773,7 @@ export class Engine {
     const r = this.profile.requests.open.find((x) => x.id === id);
     if (!r) return;
     closeRequest(this.profile.requests, id, true);
+    this.audio.cue('success');
     this.earn(r.reward, `完成了${r.from}的委托`, true);
     this.toast(`完成委托：${r.from}收到了「${r.goal}」 · +${r.reward} 灵光`);
     refreshBoard(this.profile.requests, this.world, Date.now());
@@ -742,6 +828,7 @@ export class Engine {
     }
     const gift = Math.min(20, 2 + 5 * rareTraitKeys(c.ph.rare).length);
     if (!this.sendAway(cid, '远方的湖泊', 'released')) return;
+    this.count('released');
     this.earn(gift, `放生了「${name}」`, true);
     this.toast(`「${name}」游向了远方 · +${gift} 灵光`);
     await this.saveActive();
@@ -800,6 +887,7 @@ export class Engine {
       return;
     }
     this.profile.lumen -= REVIVE_PRICE;
+    this.count('revived');
     this.profileDirty = true;
     this.select(egg.id);
     this.toast(`生命卡「${card.name}」在「${this.world.name}」里化作了一颗卵`);
@@ -847,7 +935,10 @@ export class Engine {
         this.toast('水缸里现在放不下了');
         return;
       }
-    } else this.profile.unlocks.push(id);
+    } else {
+      this.profile.unlocks.push(id);
+      this.audio.cue('unlock');
+    }
     this.profile.lumen -= price;
     if (id === 'nursery') await this.createNursery();
     this.toast(item.kind === 'goods' ? `「${item.name}」来到了「${this.world.name}」` : `得到了「${item.name}」`);
@@ -1150,6 +1241,7 @@ export class Engine {
         this.toast(`一个水缸最多放 ${MAX_DECOR} 件装饰`);
         return;
       }
+      this.count('decor');
     } else if (id === 'anemone' && !plantAnemone(this.world, x)) {
       this.toast('水里的养分不够，过一会儿再试试');
       return;
@@ -1311,6 +1403,8 @@ export class Engine {
       void this.saveProfile();
     }
     this.levelResult = { newStars, lumen };
+    this.audio.cue(run.status === 'won' ? 'star' : 'fail');
+    this.checkAchievements();
     this.publish();
   }
 

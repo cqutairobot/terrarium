@@ -1,7 +1,7 @@
 /**
  * Visual + runtime check with the pre-installed Playwright Chromium.
  *   npm run build && node scripts/snap.mjs [--seed eden] [--size 1920x1080] [--out snapshots]
- *     [--scenario basic|zoom|soul|companion|tanks|breeding|levels|forms|waters] [--quality auto|0|1|2]
+ *     [--scenario basic|zoom|soul|companion|tanks|breeding|levels|forms|waters|polish] [--quality auto|0|1|2]
  * Serves dist/ with `vite preview`, takes screenshots at several moments,
  * measures frame rate and reports console errors.
  */
@@ -474,6 +474,55 @@ try {
         return { tanks: e.profile.tanks.map((t) => `${t.name}:${t.biome}`), biome: e.world.biome };
       });
       console.log(`[${size}] after reload: ${JSON.stringify(after)}`);
+    }
+    if (scenario === 'polish') {
+      // step 5: a wonder's first appearance gets a spotlight; achievements; the collection
+      const shot = async (name) => {
+        await page.waitForTimeout(700);
+        await page.screenshot({ path: `${out}/${size}-${name}.png` });
+      };
+      await page.evaluate(async () => {
+        const e = window.__eden;
+        e.skipTutorial();
+        e.earn(200, '测试用的灵光');
+        // a gene card of a golden one, revived as an egg
+        const c = e.world.creatures.find((x) => x.stage === 'adult' && x.ph.trophic !== 'carnivore');
+        const g = { g: c.genome.g.slice(), rare: c.genome.rare.slice() };
+        g.rare[0] = 1;
+        g.rare[1] = 1;
+        e.profile.geneCards.push({ id: 'card-gold', name: '金色的种子', genome: g, species: '', generation: 0, hue: 0.13, savedAt: Date.now() });
+        await e.reviveCard('card-gold');
+      });
+      // a pinch of food by hand
+      await page.mouse.click(w * 0.5, h * 0.3);
+      // let the egg hatch
+      await page.evaluate(() => {
+        const e = window.__eden;
+        for (let i = 0; i < 12 * 30; i++) e.world.step(1 / 30);
+      });
+      await page.waitForTimeout(2500);
+      const spot = await page.evaluate(() => {
+        const e = window.__eden;
+        return { spotlight: e.spotlight && { trait: e.spotlight.trait, name: e.spotlight.name }, scale: e.loop.timeScale, follow: e.renderer.followId, collection: Object.keys(e.profile.collection.rare) };
+      });
+      console.log(`[${size}] spotlight: ${JSON.stringify(spot)}`);
+      await shot('spotlight');
+      await page.waitForTimeout(6000);
+      const ach = await page.evaluate(() => {
+        const e = window.__eden;
+        return { achievements: Object.keys(e.profile.achievements), stats: e.profile.stats, scale: e.loop.timeScale, forms: Object.keys(e.profile.collection.forms), waters: Object.keys(e.profile.collection.waters), species: e.profile.collection.species.length };
+      });
+      console.log(`[${size}] achievements: ${JSON.stringify(ach)}`);
+      await shot('achievement-toasts');
+      await page.evaluate(() => window.__eden.dismissSpotlight());
+      await page.mouse.move(w / 2, h - 12);
+      await page.waitForTimeout(900);
+      await page.getByRole('button', { name: '生命图鉴' }).click();
+      await page.waitForTimeout(400);
+      await page.getByRole('button', { name: '全部收藏' }).click();
+      await shot('collection');
+      await page.getByRole('button', { name: '成就', exact: true }).click();
+      await shot('achievements');
     }
     if (scenario === 'companion') {
       // desktop-companion behaviour: auto quality, settings, sound, still pointer, wallpaper mode

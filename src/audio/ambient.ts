@@ -187,6 +187,44 @@ export class Ambient {
     }
   }
 
+  /** A short musical cue for something the player achieved or found. */
+  cue(kind: 'discovery' | 'success' | 'unlock' | 'star' | 'fail'): void {
+    const ctx = this.ctx;
+    if (!ctx || !this.enabled || ctx.state !== 'running') return;
+    const t = ctx.currentTime;
+    this.lastChime = t;
+    const notes: Record<typeof kind, [number, number][]> = {
+      // a slow rising arpeggio that lingers
+      discovery: [
+        [0, 0],
+        [4, 0.16],
+        [7, 0.32],
+        [11, 0.48],
+        [14, 0.72],
+      ],
+      success: [
+        [7, 0],
+        [12, 0.14],
+      ],
+      unlock: [
+        [0, 0],
+        [7, 0.1],
+        [12, 0.2],
+        [16, 0.3],
+      ],
+      star: [
+        [12, 0],
+        [16, 0.12],
+        [19, 0.24],
+      ],
+      fail: [
+        [-5, 0],
+        [-8, 0.3],
+      ],
+    };
+    for (const [semis, at] of notes[kind]) this.chime(t + at, semis, kind === 'fail' ? 0.03 : 0.05);
+  }
+
   private bubble(t: number, pitch: number): void {
     const ctx = this.ctx!;
     const osc = ctx.createOscillator();

@@ -18,6 +18,7 @@ import { TopBar } from './components/TopBar';
 import { Tutorial } from './components/Tutorial';
 import { WorldPanel } from './components/WorldPanel';
 import { LevelHud, LevelIntro, LevelResultCard, LevelsPanel } from './components/Levels';
+import { SpotlightCard } from './components/Spotlight';
 import { itemById } from '../game/economy';
 import { Icon } from './icons';
 import { useEngineVersion } from './useEngine';
@@ -212,6 +213,7 @@ export function App({ engine, wallpaper }: { engine: Engine; wallpaper: boolean 
 
       {!hidden && engine.pairing && <PairHint engine={engine} />}
       {!hidden && engine.pairOffer && <PairOfferCard engine={engine} />}
+      {!hidden && engine.spotlight && !level && !engine.pairOffer && <SpotlightCard engine={engine} />}
 
       {!hidden && engine.aiming === 'meteor' && <div className="aim-hint glass">点击水中，选择流星坠落的地方 · 右键或 Esc 取消</div>}
       {!hidden && engine.placing && <div className="aim-hint glass">点击缸底，放下「{itemById(engine.placing)?.name}」 · 右键或 Esc 取消</div>}

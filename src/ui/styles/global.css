@@ -2175,3 +2175,171 @@ body.pointer-still * {
   border-color: rgba(159, 243, 224, 0.3);
   color: var(--eden-accent);
 }
+
+/* ---------------------------------------------------------- a wonder, seen for the first time */
+
+.spotlight {
+  position: absolute;
+  left: 50%;
+  top: 72px;
+  transform: translateX(-50%);
+  width: min(480px, calc(100vw - 32px));
+  display: flex;
+  gap: 14px;
+  align-items: center;
+  padding: 14px 16px;
+  border-radius: 18px;
+  background: var(--eden-glass-panel);
+  border-color: rgba(255, 224, 138, 0.35);
+  box-shadow:
+    0 10px 40px rgba(0, 10, 14, 0.35),
+    0 0 40px rgba(255, 224, 138, 0.12);
+  pointer-events: auto;
+  animation: spotlight-in 0.7s var(--ease);
+  z-index: 4;
+}
+
+@keyframes spotlight-in {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) translateY(-10px) scale(0.96);
+  }
+}
+
+.spotlight canvas {
+  flex: none;
+  border-radius: 12px;
+}
+
+.spotlight-text {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.spotlight-kicker {
+  font-size: 11.5px;
+  letter-spacing: 0.18em;
+  color: var(--eden-gold);
+}
+
+.spotlight-title {
+  font-size: 17px;
+  letter-spacing: 0.1em;
+  color: var(--eden-ink);
+}
+
+.spotlight .btn-row {
+  margin-top: 4px;
+}
+
+/* ---------------------------------------------------------- collection and achievements */
+
+.collect-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-top: 12px;
+  font-size: 13px;
+}
+
+.collect-head b {
+  font-weight: 500;
+  color: var(--eden-gold);
+}
+
+.collect-bar {
+  margin: 6px 0 2px;
+}
+
+.collect-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 6px;
+}
+
+.collect-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px dashed rgba(190, 255, 236, 0.1);
+  color: var(--eden-ink-faint);
+  font-size: 12.5px;
+  min-width: 0;
+}
+
+.collect-item b {
+  font-weight: 500;
+}
+
+.collect-item span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.collect-item.found {
+  border-style: solid;
+  border-color: rgba(255, 224, 138, 0.22);
+  background: rgba(255, 224, 138, 0.05);
+  color: var(--eden-ink);
+}
+
+.met-species {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.species-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11.5px;
+  padding: 2px 8px;
+  border-radius: 20px;
+  border: 1px solid var(--eden-line);
+  color: var(--eden-ink-soft);
+}
+
+.species-chip i {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.achievement-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.achievement {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 10px;
+  align-items: center;
+  padding: 9px 11px;
+  border-radius: 11px;
+  border: 1px solid rgba(190, 255, 236, 0.07);
+  color: var(--eden-ink-faint);
+  font-size: 12.5px;
+}
+
+.achievement b {
+  font-weight: 500;
+}
+
+.achievement.done {
+  color: var(--eden-ink);
+  border-color: rgba(255, 224, 138, 0.25);
+  background: rgba(255, 224, 138, 0.05);
+}
+
+.achievement.done b {
+  color: var(--eden-gold);
+}
