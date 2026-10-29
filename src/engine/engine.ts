@@ -169,6 +169,8 @@ export class Engine {
   private toastId = 1;
   private input: Input;
   private saving = false;
+  private saveQueue: Promise<void> = Promise.resolve();
+  private queuedSaves = 0;
   private runner = new CatchUpRunner();
   private hiddenAt = 0;
 
@@ -492,7 +494,7 @@ export class Engine {
   }
 
   feedAt(x: number, y: number, count: number): void {
-    if (this.tool === 'none') return;
+    if (this.tool === 'none' || this.catchUp) return;
     if (this.level) {
       if (!this.allowed(FOOD_TOOLS[this.tool], FOOD_LABELS[this.tool])) return;
       levelFeed(this.level, this.world, this.tool, x, y, count);
@@ -637,9 +639,34 @@ export class Engine {
   }
 
   private async saveProfile(): Promise<void> {
-    this.profile.lastSeen = Date.now();
-    this.profileDirty = false;
-    await this.storage.putDoc(PROFILE_KEY, this.profile);
+    const ok = await this.enqueueSave(async () => {
+      this.profile.lastSeen = Date.now();
+      this.profileDirty = false;
+      await this.storage.putDoc(PROFILE_KEY, structuredClone(this.profile));
+    });
+    if (!ok) throw new Error('未能保存玩家档案，请重试');
+  }
+
+  /** Every caller waits for its own write; failed writes do not block later saves. */
+  private enqueueSave(write: () => Promise<void>): Promise<boolean> {
+    this.queuedSaves++;
+    this.saving = true;
+    const result = this.saveQueue.then(write).then(
+      () => true,
+      () => {
+        this.profileDirty = true;
+        return false;
+      },
+    );
+    this.saveQueue = result.then(() => {
+      this.queuedSaves--;
+      this.saving = this.queuedSaves > 0;
+    });
+    return result;
+  }
+
+  private async requireActiveSave(): Promise<void> {
+    if (!(await this.saveActive())) throw new Error('未能保存当前水缸，请重试');
   }
 
   // ------------------------------------------------------------ lumen
@@ -664,10 +691,9 @@ export class Engine {
    * Reward what really happened in the shown tank since last time (from its
    * chronicle), plus a gentle income for a living, varied tank.
    */
-  private collectRewards(quietSummary = false): void {
-    const info = this.profile.tanks.find((t) => t.id === this.tankId);
+  private collectRewards(quietSummary = false, w = this.world, tankId = this.tankId): void {
+    const info = this.profile.tanks.find((t) => t.id === tankId);
     if (!info) return;
-    const w = this.world;
     const chron = w.history.chronicle;
     const lastId = chron.length ? chron[chron.length - 1].id : 0;
     if (info.seenEvent === undefined) {
@@ -968,22 +994,35 @@ export class Engine {
   /** Write the shown tank (and the profile) to storage. */
   async saveActive(): Promise<boolean> {
     // a challenge's tank is never written over the garden
-    if (this.saving || this.catchUp || this.level) return false;
-    this.saving = true;
-    try {
-      this.collectRewards();
-      const now = Date.now();
-      await this.storage.put(tankRecord(this.world, this.tankId, now));
-      const info = this.profile.tanks.find((t) => t.id === this.tankId);
-      if (info) syncTankInfo(info, this.world, now);
-      await this.saveProfile();
-      this.lastSavedAt = now;
-      return true;
-    } catch {
-      return false;
-    } finally {
-      this.saving = false;
-    }
+    if (this.catchUp || this.level) return false;
+    // Bind the world before waiting; freeze its state and rewards together when
+    // the write starts, so a later request cannot advance this snapshot's cursor.
+    const world = this.world;
+    const tankId = this.tankId;
+    return this.enqueueSave(async () => {
+      // Reset/load can replace this tank while the request waits. Its old
+      // timeline must not collect rewards using the replacement's cursors.
+      if (this.tankId === tankId && this.world !== world) return;
+      this.collectRewards(this.world !== world, world, tankId);
+      const rec = tankRecord(world, tankId, Date.now());
+      const profile = structuredClone(this.profile);
+      const summary = {
+        name: rec.worldName,
+        lastWall: rec.savedAt,
+        simTime: rec.simTime,
+        population: rec.population,
+        generation: rec.generation,
+      };
+      const info = profile.tanks.find((t) => t.id === tankId);
+      if (info) Object.assign(info, summary);
+      profile.lastSeen = Date.now();
+      this.profileDirty = false;
+      await this.storage.putAll([rec], { [PROFILE_KEY]: profile });
+      const currentInfo = this.profile.tanks.find((t) => t.id === tankId);
+      if (currentInfo) Object.assign(currentInfo, summary);
+      this.profile.lastSeen = profile.lastSeen;
+      if (this.world === world && this.tankId === tankId) this.lastSavedAt = rec.savedAt;
+    });
   }
 
   /** 'auto' keeps the tank itself up to date; 'manual' also keeps a snapshot to return to. */
@@ -1084,7 +1123,7 @@ export class Engine {
     }
     this.busy = true;
     try {
-      await this.saveActive();
+      await this.requireActiveSave();
       const aspect = window.innerWidth / Math.max(1, window.innerHeight);
       if (biome !== 'shallows' && !has(this.profile, `biome:${biome}`)) biome = 'shallows';
       const w = from ?? new World({ seed: seed?.trim() || randomSeed(), aspect, name: name?.trim() || undefined, biome });
@@ -1112,7 +1151,7 @@ export class Engine {
     if (!info) return;
     this.busy = true;
     try {
-      await this.saveActive();
+      await this.requireActiveSave();
       const rec = await this.storage.get(id);
       if (!rec) {
         this.toast('找不到这个水缸');
@@ -1175,33 +1214,74 @@ export class Engine {
       return;
     }
     this.busy = true;
+    this.loop.stop();
+    // Capture this save before installing the catch-up overlay, which blocks edits.
+    const saved = this.saveActive();
+    this.catchUp = { tankName: info.name, target: 0, done: 0, awayMs: 0, stopping: false };
+    this.publish();
     try {
+      if (!(await saved)) throw new Error('未能保存当前水缸，请重试');
       const rec = await this.storage.get(toId);
       if (!rec) {
         this.toast('找不到那个水缸');
         return;
       }
-      const dest = restoreWorld(rec.snapshot);
-      const name = c.customName || c.name;
-      const traveller = emigrate(this.world, cid, dest.name);
-      if (!traveller) return;
-      try {
-        immigrate(dest, structuredClone(traveller));
-        // the destination keeps its own clock of absence: it has not been running meanwhile
-        await this.storage.put(tankRecord(dest, toId, Date.now()));
-        info.population = dest.consumerCount + dest.predatorCount + 1;
-      } catch (err) {
-        immigrate(this.world, traveller);
-        throw err;
+      let dest = restoreWorld(rec.snapshot);
+      const now = Date.now();
+      const awayMs = Math.max(0, now - info.lastWall);
+      if (this.prefs.offlineProgress && awayMs >= MIN_AWAY_MS && !this.catchUp?.stopping) {
+        const seconds = Math.min(MAX_CATCH_UP, awayMs / 1000);
+        this.catchUp = { tankName: dest.name, target: seconds, done: 0, awayMs, stopping: false };
+        this.publish();
+        const result = await this.runner.run(snapshotWorld(dest), { seconds, wallStart: now - awayMs, wallEnd: now }, (done) => {
+          if (this.catchUp) this.catchUp.done = done;
+          this.publish();
+        });
+        dest = restoreWorld(result.snapshot);
       }
-      if (this.renderer.selectedId === cid) this.select(0);
-      if (this.renderer.followId === cid) this.follow(0);
-      await this.saveActive();
-      this.toast(`「${name}」搬去了「${dest.name}」`);
+
+      // Stage both halves on copies. A failed transaction leaves the live world intact.
+      const source = restoreWorld(structuredClone(snapshotWorld(this.world)));
+      const sourceId = this.tankId;
+      const traveller = emigrate(source, cid, dest.name);
+      if (!traveller) return;
+      immigrate(dest, traveller);
+      source.rebuildGrids();
+      dest.rebuildGrids();
+      const arrivedAt = Date.now();
+      const records = [tankRecord(source, sourceId, arrivedAt), tankRecord(dest, toId, arrivedAt)];
+      const ok = await this.enqueueSave(async () => {
+        const profile = structuredClone(this.profile);
+        syncTankInfo(profile.tanks.find((t) => t.id === sourceId)!, source, arrivedAt);
+        syncTankInfo(profile.tanks.find((t) => t.id === toId)!, dest, arrivedAt);
+        profile.lastSeen = arrivedAt;
+        await this.storage.putAll(records, { [PROFILE_KEY]: profile });
+        this.profile = profile;
+        this.profileDirty = false;
+      });
+      if (!ok) throw new Error('未能保存搬家结果，生命仍留在原水缸，请重试');
+      const selected = this.renderer.selectedId;
+      const followed = this.renderer.followId;
+      this.setWorld(source);
+      this.renderer.selectedId = source.creatureMap.has(selected) ? selected : 0;
+      this.renderer.followId = source.creatureMap.has(followed) ? followed : 0;
+      this.lastSavedAt = arrivedAt;
+      this.catchUp = null;
+      this.collectRewards(true, dest, toId);
+      // The transfer itself is already durable even if a later reward write fails.
+      try {
+        await this.saveProfile();
+      } catch {
+        this.profileDirty = true;
+        this.toast('搬家已完成，奖励尚未保存，将稍后重试');
+      }
+      this.toast(`「${c.customName || c.name}」搬去了「${dest.name}」`);
     } catch (err) {
       this.toast('搬家没有成功：' + String((err as Error)?.message ?? err));
     } finally {
+      this.catchUp = null;
       this.busy = false;
+      if (!document.hidden) this.loop.start();
       this.publish();
     }
   }
@@ -1324,9 +1404,11 @@ export class Engine {
     if (this.busy || this.catchUp) return;
     this.busy = true;
     try {
-      if (!this.level) await this.saveActive();
+      if (!this.level) await this.requireActiveSave();
       resetRequestTrackers(this.profile.requests);
       this.openLevel(def, 'intro');
+    } catch (err) {
+      this.toast('进入挑战失败：' + String((err as Error)?.message ?? err));
     } finally {
       this.busy = false;
       this.publish();
@@ -1448,7 +1530,9 @@ export class Engine {
    * tank shown): the world runs that long in a worker, capped, skippable.
    */
   async catchUpAfter(awayMs: number): Promise<void> {
-    if (!this.prefs.offlineProgress || this.catchUp || this.level || awayMs < MIN_AWAY_MS) {
+    // Returning to the tab must not restart the live loop during a pending transfer.
+    if (this.catchUp) return;
+    if (!this.prefs.offlineProgress || this.level || awayMs < MIN_AWAY_MS) {
       this.loop.start();
       return;
     }
