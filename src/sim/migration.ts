@@ -76,7 +76,7 @@ export function speciesFor(world: World, genome: Genome): number {
   let bd = Infinity;
   for (const sp of world.species.values()) {
     if (sp.extinctAt !== null || sp.population <= 0 || sp.trophic !== trophic || sp.centroid.length !== genome.g.length) continue;
-    const d = geneticDistance({ g: sp.centroid, rare: [] }, genome);
+    const d = geneticDistance({ g: sp.centroid, rare: [], morph: sp.morph }, genome);
     if (d < bd) {
       bd = d;
       best = sp.id;

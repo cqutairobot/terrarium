@@ -3,6 +3,7 @@ import type { Creature } from '../entities/creature';
 import { plantHeight } from '../entities/producer';
 import type { Vec } from '../environment';
 import type { World } from '../world';
+import { comfortSpot } from '../decor';
 import { bodyRadius } from './perception';
 
 const flow: Vec = { x: 0, y: 0 };
@@ -181,6 +182,21 @@ export function steer(world: World, c: Creature, dt: number): void {
       break;
   }
 
+  // water that hurts drives a body to a stone that makes it bearable, whatever it was doing
+  if (world.decor.length && c.state !== 'flee' && c.state !== 'hunt' && c.state !== 'court') {
+    const cozy = comfortSpot(world, c, 420, 0.45);
+    if (cozy) {
+      const dx = cozy.x - c.x;
+      const dy = cozy.y - 36 - c.y;
+      const d = Math.hypot(dx, dy) + 1e-6;
+      if (d > 40) {
+        dvx = dx / d;
+        dvy = dy / d;
+        frac = Math.max(frac, 0.55);
+      }
+    }
+  }
+
   let wantVx = dvx * speedCap * frac;
   let wantVy = dvy * speedCap * frac;
 
@@ -231,7 +247,21 @@ export function steer(world: World, c: Creature, dt: number): void {
   const floorGap = floor - c.y;
   const lowTarget = c.state === 'forage' && c.targetKind !== 'point' && c.targetKind !== 'none';
   const floorMargin = c.state === 'rest' || c.state === 'eat' || lowTarget ? 8 + r : 34 + r;
-  if (floorGap < floorMargin) wantVy -= ((floorMargin - floorGap) / floorMargin) * speedCap * 0.9;
+  if (floorGap < floorMargin && ph.morph !== 'shrimp') wantVy -= ((floorMargin - floorGap) / floorMargin) * speedCap * 0.9;
+
+  if (ph.morph === 'shrimp' && c.state !== 'flee') {
+    // shrimp keep low, picking over whatever settles on the floor
+    const low = floor - 30 - r;
+    if (c.y < low) wantVy += Math.min(1, (low - c.y) / 200) * speedCap * 0.6;
+    else if (floorGap < r + 4) wantVy -= speedCap * 0.3;
+  } else if (ph.morph === 'jelly') {
+    // a bell hangs in the open middle water, and moves in pulses
+    const deep = c.y - world.height * 0.62;
+    if (deep > 0 && c.state !== 'eat') wantVy -= Math.min(1, deep / 300) * speedCap * 0.5;
+    const pulse = 0.25 + 0.75 * Math.max(0, Math.sin(c.swim * 0.9));
+    wantVx *= pulse;
+    wantVy *= pulse;
+  }
 
   integrate(world, c, wantVx, wantVy, speedCap, dt);
 }
@@ -261,9 +291,9 @@ function integrate(world: World, c: Creature, wantVx: number, wantVy: number, ca
     c.vx *= k;
     c.vy *= k;
   }
-  // currents carry small, light bodies more
+  // currents carry small, light bodies more (a bell drifts with them, a snail holds fast)
   world.env.flowAt(c.x, c.y, flow);
-  const coupling = 1 / (1 + c.ph.mass * c.growth * 0.25);
+  const coupling = ph.morph === 'snail' ? 0 : (ph.morph === 'jelly' ? 2 : 1) / (1 + c.ph.mass * c.growth * 0.25);
   const turb = world.env.turbulence;
   c.x += (c.vx + flow.x * coupling * (0.6 + turb)) * dt;
   c.y += (c.vy + flow.y * coupling * (0.6 + turb)) * dt;
@@ -282,7 +312,11 @@ function integrate(world: World, c: Creature, wantVx: number, wantVy: number, ca
     c.vy = Math.abs(c.vy) * 0.3;
   }
   const floor = world.groundAt(c.x) - r * 0.6;
-  if (c.y > floor) {
+  if (ph.morph === 'snail') {
+    // a snail never leaves the floor
+    c.y = floor;
+    c.vy = 0;
+  } else if (c.y > floor) {
     c.y = floor;
     c.vy = -Math.abs(c.vy) * 0.3;
   }
@@ -325,9 +359,9 @@ export function resolveTargetPoint(world: World, c: Creature): { x: number; y: n
         const top = p.y - plantHeight(p);
         tp.x = p.x;
         tp.y = clamp(c.y, top + 8, p.y - 8);
-      } else if (p.kind === 'fungus') {
+      } else if (p.kind === 'fungus' || p.kind === 'moss') {
         tp.x = p.x;
-        tp.y = p.y - 6;
+        tp.y = p.y - (p.kind === 'moss' ? 4 : 6);
       }
       break;
     }

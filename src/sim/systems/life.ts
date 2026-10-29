@@ -3,6 +3,7 @@ import type { Vec } from '../environment';
 import type { Creature, DeathCause } from '../entities/creature';
 import { createCorpse } from '../spawn';
 import type { World } from '../world';
+import { temperatureAt } from '../decor';
 import { thermalStress } from './metabolism';
 
 const flow: Vec = { x: 0, y: 0 };
@@ -62,7 +63,7 @@ export function updateHealth(world: World, c: Creature, dt: number): void {
       cause = 'starvation';
     }
   }
-  const t = world.env.temperature;
+  const t = world.decor.length ? temperatureAt(world, c.x, c.y) : world.env.temperature;
   const stress = thermalStress(c, t);
   if (stress > 0.7) {
     const d = (stress - 0.7) * 0.03 * maxH;

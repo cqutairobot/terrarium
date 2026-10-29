@@ -1,6 +1,10 @@
-export type ProducerKind = 'plant' | 'algae' | 'fungus';
+export type ProducerKind = 'plant' | 'algae' | 'fungus' | 'moss' | 'anemone';
 
-/** Producers: rooted seaweed, drifting algae colonies and glowing fungus on the floor. */
+/**
+ * Producers: rooted seaweed, drifting algae colonies and glowing fungus on
+ * the floor; moss cushions creeping along it, and glowing anemones (which
+ * the player brings) where the small can hide.
+ */
 export interface Producer {
   id: number;
   kind: ProducerKind;

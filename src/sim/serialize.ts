@@ -1,4 +1,6 @@
 import type { EcoConfig, EnvSettings } from './config';
+import type { BiomeId } from './biomes';
+import type { Decor } from './decor';
 import type { RngState } from './core/rng';
 import type { Corpse } from './entities/corpse';
 import type { Creature } from './entities/creature';
@@ -68,6 +70,10 @@ export interface WorldSnapshot {
   foods: Food[];
   corpses: Corpse[];
   seeds: Seed[];
+  /** Player-placed decorations (absent in older saves). */
+  decor?: Decor[];
+  /** The kind of water (absent in older saves: the shallows). */
+  biome?: BiomeId;
   species: SpeciesRecord[];
   families: FamilyRecord[];
   ledger: Ledger;
@@ -135,6 +141,8 @@ export function snapshotWorld(w: World): WorldSnapshot {
     foods: clone(w.foods),
     corpses: clone(w.corpses),
     seeds: clone(w.seeds),
+    decor: clone(w.decor),
+    biome: w.biome,
     species: clone([...w.species.values()]),
     families: clone([...w.families.values()]),
     ledger: { ...w.ledger },
@@ -155,7 +163,7 @@ export function migrate(snap: WorldSnapshot): WorldSnapshot {
 export function restoreWorld(input: WorldSnapshot): World {
   const snap = migrate(input);
   const w = new World(
-    { seed: snap.seed, aspect: snap.width / snap.height, name: snap.name, config: snap.cfg, createdAt: snap.createdAt },
+    { seed: snap.seed, aspect: snap.width / snap.height, name: snap.name, config: snap.cfg, createdAt: snap.createdAt, biome: snap.biome },
     true,
   );
   w.terrain = clone(snap.terrain);
@@ -210,6 +218,7 @@ export function restoreWorld(input: WorldSnapshot): World {
   for (const f of snap.foods) w.addFood(clone(f));
   for (const k of snap.corpses) w.addCorpse(clone(k));
   w.seeds = clone(snap.seeds);
+  w.decor = clone(snap.decor ?? []);
   if (snap.history !== undefined && w.history) w.history.load(snap.history);
   w.rebuildGrids();
   return w;

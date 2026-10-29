@@ -40,7 +40,7 @@ export function syncTankInfo(info: TankInfo, world: World, now: number): void {
 }
 
 /** Register a new tank in the profile and return its id (the world is saved by the caller). */
-export function addTank(profile: Profile, world: World, now: number, kind: TankKind = 'main', biome = 'shallows'): string {
+export function addTank(profile: Profile, world: World, now: number, kind: TankKind = 'main', biome: string = world.biome): string {
   const id = tankRecordId(profile.nextTankNo++);
   const info: TankInfo = {
     id,

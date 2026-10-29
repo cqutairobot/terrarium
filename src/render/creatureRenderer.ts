@@ -1,6 +1,7 @@
 import { clamp } from '../sim/core/math';
 import type { Creature } from '../sim/entities/creature';
 import { hsl } from './color';
+import { drawForm } from './formsRenderer';
 import { drawSprite, glowSprite, whiteSprite } from './sprites';
 
 const SEGMENTS = 5;
@@ -44,7 +45,7 @@ export interface DrawOpts {
   detail: number;
 }
 
-interface Colors {
+export interface Colors {
   body: string;
   bodyDark: string;
   bodyLight: string;
@@ -135,6 +136,11 @@ export function drawCreature(
     drawSprite(ctx, glowSprite(ph.rare.golden ? 0.13 : ph.accentHue, 0.85, 0.65), x, y, r * 3.4, glowAmt * col.alpha * 0.55);
     ctx.restore();
     ctx.globalAlpha = 1;
+  }
+
+  if (ph.morph !== 'fish') {
+    drawForm(ctx, c, x, y, heading, vis, o, col, r, dyingP);
+    return;
   }
 
   if (screenR < 3.2 || o.detail < 0) {

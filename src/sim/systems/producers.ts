@@ -1,7 +1,19 @@
 import { clamp } from '../core/math';
 import { plantHeight, type Producer } from '../entities/producer';
+import { lampLight } from '../decor';
 import { createProducer, createSeed } from '../spawn';
 import type { World } from '../world';
+
+/** Moss: slow cushions on the floor that creep sideways. */
+export const MOSS_GROWTH = 0.08;
+export const MOSS_MAX_BIOMASS = 18;
+const MOSS_SPREAD = 0.02;
+const MAX_MOSS = 120;
+/** Anemones: slow, long-lived, inedible; a living shelter that glows at night. */
+export const ANEMONE_GROWTH = 0.04;
+export const ANEMONE_MAX_BIOMASS = 40;
+const ANEMONE_BUD = 0.0006;
+const MAX_ANEMONES = 14;
 
 /** Plants and algae like it mild; growth falls off in the cold and in heat. */
 export function producerTemperatureFactor(t: number): number {
@@ -32,12 +44,16 @@ export function updateProducers(world: World, dt: number): void {
   let plants = 0;
   let algae = 0;
   let fungi = 0;
+  let moss = 0;
+  let anemones = 0;
   for (const p of world.producers) {
     if (p.kind === 'fungus') {
       env.fungus[env.cellIndex(p.x, p.y - 5)] += p.biomass;
       fungi++;
     } else if (p.kind === 'plant') plants++;
-    else algae++;
+    else if (p.kind === 'algae') algae++;
+    else if (p.kind === 'moss') moss++;
+    else anemones++;
   }
 
   const newborn: Producer[] = [];
@@ -58,13 +74,13 @@ export function updateProducers(world: World, dt: number): void {
           shoot.biomass = got;
           shoot.variant = Math.min(1, Math.max(0, p.variant + rng.normal() * 0.04));
           newborn.push(shoot);
-        }
+        } else if (got > 0) env.addNutrient(p.x, p.y - 10, got);
       }
       continue;
     }
     if (p.kind === 'plant') {
       const h = plantHeight(p);
-      const light = env.storedLightAt(p.y - h * 0.75);
+      const light = env.storedLightAt(p.y - h * 0.75) + (world.decor.length ? lampLight(world, p.x, p.y - h * 0.75) : 0);
       const n = env.nutrientAt(p.x, p.y - 10);
       const logistic = Math.max(2.5, p.biomass) * (1 - p.biomass / p.maxBiomass);
       const growth = cfg.plantGrowth * boost * light * monod(n, K) * tempF * logistic;
@@ -103,7 +119,7 @@ export function updateProducers(world: World, dt: number): void {
         }
       }
     } else if (p.kind === 'algae') {
-      const light = env.lightAt(p.y);
+      const light = env.lightAt(p.y) + (world.decor.length ? lampLight(world, p.x, p.y) : 0);
       const n = env.nutrientAt(p.x, p.y);
       const growth = cfg.algaeGrowth * boost * light * monod(n, K * 0.6) * tempF * Math.max(1, p.biomass) * (1 - p.biomass / p.maxBiomass);
       if (growth > 0) p.biomass += env.takeNutrient(p.x, p.y, growth * dt);
@@ -116,6 +132,27 @@ export function updateProducers(world: World, dt: number): void {
         child.vx = p.vx + rng.range(-3, 3);
         child.vy = p.vy + rng.range(-3, 3);
         newborn.push(child);
+      }
+    } else if (p.kind === 'moss' || p.kind === 'anemone') {
+      // floor dwellers that ask little light; moss creeps along, an anemone buds now and then
+      const isMoss = p.kind === 'moss';
+      const light = 0.35 + 0.65 * env.storedLightAt(p.y - 6) + (world.decor.length ? lampLight(world, p.x, p.y - 6) : 0);
+      const n = env.nutrientAt(p.x, p.y - 10);
+      const rate = isMoss ? MOSS_GROWTH : ANEMONE_GROWTH;
+      const growth = rate * boost * light * monod(n, K) * tempF * Math.max(1, p.biomass) * (1 - p.biomass / p.maxBiomass);
+      if (growth > 0) p.biomass += env.takeNutrient(p.x, p.y - 10, growth * dt);
+      const full = p.biomass > p.maxBiomass * (isMoss ? 0.7 : 0.85);
+      const room = isMoss ? moss + newborn.length < MAX_MOSS : anemones + newborn.length < MAX_ANEMONES;
+      if (full && room && rng.chance((isMoss ? MOSS_SPREAD : ANEMONE_BUD) * dt)) {
+        const nx = p.x + rng.sign() * rng.range(isMoss ? 14 : 30, isMoss ? 30 : 70);
+        if (nx > 8 && nx < world.width - 8 && !world.pointProducers.some((o) => o.kind === p.kind && Math.abs(o.x - nx) < (isMoss ? 10 : 24))) {
+          const share = p.biomass * (isMoss ? 0.3 : 0.25);
+          p.biomass -= share;
+          const child = createProducer(world.newId(), p.kind, nx, world.groundAt(nx) + 1, rng, p.maxBiomass, 0, p.hue + rng.normal() * 0.01);
+          child.biomass = share;
+          child.age = 0;
+          newborn.push(child);
+        }
       }
     } else {
       // fungus lives on detritus first, dissolved nutrients second, and prefers the dark
@@ -166,6 +203,6 @@ export function updateProducers(world: World, dt: number): void {
       a.age = 0;
       a.biomass = got;
       world.addProducer(a);
-    }
+    } else if (got > 0) env.addNutrient(x, y, got);
   }
 }

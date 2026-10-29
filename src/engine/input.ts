@@ -44,7 +44,7 @@ export class Input {
     this.moved = false;
     this.canvas.setPointerCapture(e.pointerId);
     clearTimeout(this.longTimer);
-    if (!this.engine.aiming && this.engine.tool !== 'none' && this.engine.canPour()) {
+    if (!this.engine.aiming && !this.engine.placing && this.engine.tool !== 'none' && this.engine.canPour()) {
       this.longTimer = window.setTimeout(() => this.startPour(), LONG_PRESS_MS);
     }
   };
@@ -58,7 +58,7 @@ export class Input {
     }
     if (!this.downAt) {
       // hover feedback
-      const aiming = this.engine.aiming !== null;
+      const aiming = this.engine.aiming !== null || this.engine.placing !== null;
       const over = !aiming && this.engine.renderer.pick(p.x, p.y);
       this.canvas.style.cursor = aiming ? 'crosshair' : over ? 'pointer' : '';
     }
@@ -84,6 +84,7 @@ export class Input {
   private onContext = (e: Event): void => {
     e.preventDefault();
     if (this.engine.aiming) this.engine.aim(null);
+    if (this.engine.placing) this.engine.cancelPlacing();
   };
 
   private click(p: { x: number; y: number }): void {
@@ -91,6 +92,10 @@ export class Input {
     const w = this.toWorld(p);
     if (eng.aiming) {
       eng.disaster(eng.aiming, w.x, w.y);
+      return;
+    }
+    if (eng.placing) {
+      void eng.placeAt(w.x);
       return;
     }
     const hit = eng.renderer.pick(p.x, p.y);

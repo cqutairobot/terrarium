@@ -1,4 +1,5 @@
 import { hueDist, lerp } from '../core/math';
+import { inShelter } from '../decor';
 import { freshness } from '../entities/corpse';
 import type { Creature, TargetKind } from '../entities/creature';
 import type { FoodKind } from '../entities/food';
@@ -82,7 +83,8 @@ export function maxEnergyOf(c: Creature): number {
 /** Digestive efficiency of a creature for a kind of food. */
 export function producerEfficiency(c: Creature, kind: ProducerKind): number {
   const h = c.ph.herbEff;
-  return kind === 'algae' ? h : kind === 'plant' ? h * 0.95 : h * 0.9;
+  if (kind === 'anemone') return 0;
+  return kind === 'algae' ? h : kind === 'plant' ? h * 0.95 : kind === 'moss' ? h * 0.8 : h * 0.9;
 }
 
 export function foodEfficiency(c: Creature, kind: FoodKind): number {
@@ -113,7 +115,20 @@ export function backgroundHue(world: World, x: number, y: number): number {
 }
 
 /** Is a point inside the leafy cover of some plant? */
-export function inCover(world: World, x: number, y: number): boolean {
+const coverBuf: number[] = [];
+
+/** Hidden from hunters: among plants, in a hollow rock, or (for the small) in moss or an anemone. */
+export function inCover(world: World, x: number, y: number, r = 0): boolean {
+  if (world.decor.length && inShelter(world, x, y)) return true;
+  if (r > 0 && r < 10) {
+    coverBuf.length = 0;
+    world.pgrid.query(world.pointProducers, x, y, 34, coverBuf);
+    for (const idx of coverBuf) {
+      const p = world.pointProducers[idx];
+      if (p.kind === 'anemone' && p.biomass > 8 && Math.abs(p.x - x) < 30 && y > p.y - 40) return true;
+      if (p.kind === 'moss' && p.biomass > 6 && Math.abs(p.x - x) < 16 && y > p.y - 22) return true;
+    }
+  }
   for (const p of world.plants) {
     if (p.biomass < 20 || Math.abs(p.x - x) > 22) continue;
     if (y > p.y - plantHeight(p)) return true;
@@ -127,7 +142,7 @@ export function visibilityFactor(world: World, prey: Creature): number {
   const camo = 1 - hueDist(prey.ph.hue, backgroundHue(world, prey.x, prey.y)) * 2;
   let v = prey.ph.visibility * (1 - 0.4 * camo);
   if (prey.state === 'rest') v *= 0.75;
-  if (inCover(world, prey.x, prey.y)) v *= 0.5;
+  if (inCover(world, prey.x, prey.y, prey.ph.radius * prey.growth)) v *= 0.5;
   if (prey.ph.rare.fluorescent) v *= 1 + 0.35 * night;
   if (prey.glowT > 0) v *= 1.25;
   return Math.max(0.2, Math.min(1.6, v));
@@ -193,7 +208,8 @@ export function perceive(world: World, c: Creature): Perception {
       }
     }
     // prey I could swallow — worth the chase only if the meal is big enough (optimal foraging)
-    if (carnivorous && o.ph.diet < 0.6 && o.speciesId !== c.speciesId && oR <= r * 0.8 && (oR >= r * 0.35 || hungry)) {
+    // (a bell's stinging threads keep hunters away, unless they are starving)
+    if (carnivorous && o.ph.diet < 0.6 && (o.ph.morph !== 'jelly' || hungry) && o.speciesId !== c.speciesId && oR <= r * 0.8 && (oR >= r * 0.35 || hungry)) {
       const detect = sense * visibilityFactor(world, o);
       if (d < detect) {
         const weak = 1 - o.health / o.ph.maxHealth;
@@ -267,15 +283,19 @@ function scanFood(world: World, c: Creature, sense: number, p: Perception): void
   foodSeen = 0;
   const room = maxEnergyOf(c) - c.energy;
   const curiosity = c.ph.curiosity;
+  // a snail only reaches what lies on the floor
+  const floorOnly = c.ph.morph === 'snail';
+  const reachable = (x: number, y: number) => !floorOnly || y > world.groundAt(x) - 45;
   // algae and fungi
   if (c.ph.herbEff > 0.08) {
     buf.length = 0;
     world.pgrid.query(world.pointProducers, c.x, c.y, sense, buf);
     for (const idx of buf) {
       const pr = world.pointProducers[idx];
-      if (pr.biomass < 1) continue;
+      if (pr.biomass < 1 || pr.kind === 'anemone') continue;
       foodSeen += pr.biomass;
-      const fy = pr.kind === 'fungus' ? pr.y - 6 : pr.y;
+      const fy = pr.kind === 'algae' ? pr.y : pr.y - (pr.kind === 'moss' ? 4 : 6);
+      if (!reachable(pr.x, fy)) continue;
       const d = Math.hypot(pr.x - c.x, fy - c.y);
       // a nearly grazed-out colony is not worth a long swim
       if (pr.biomass < 3 && d > 40) continue;
@@ -304,6 +324,7 @@ function scanFood(world: World, c: Creature, sense: number, p: Perception): void
   world.fgrid.query(world.foods, c.x, c.y, sense, buf);
   for (const idx of buf) {
     const f = world.foods[idx];
+    if (!reachable(f.x, f.y)) continue;
     const d = Math.hypot(f.x - c.x, f.y - c.y);
     const eff = foodEfficiency(c, f.kind);
     if (eff < 0.1) continue;
@@ -315,7 +336,7 @@ function scanFood(world: World, c: Creature, sense: number, p: Perception): void
   if (c.ph.carnEff > 0.15) {
     for (const k of world.corpses) {
       const fresh = freshness(k);
-      if (fresh < 0.15) continue;
+      if (fresh < 0.15 || !reachable(k.x, k.y)) continue;
       const d = Math.hypot(k.x - c.x, k.y - c.y);
       if (d > sense) continue;
       const score = (Math.min(k.biomass, room) * c.ph.carnEff * fresh) / (d + 40);

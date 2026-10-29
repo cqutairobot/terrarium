@@ -87,6 +87,7 @@ export function pairProblem(a: Creature, b: Creature): string | null {
   if (a.id === b.id) return '不能和自己配对';
   if (a.dying > 0 || b.dying > 0) return '它正在离去';
   if (a.stage === 'egg' || b.stage === 'egg') return '卵还不能配对';
+  if (a.ph.morph !== b.ph.morph) return '身体结构不同的生命无法结为伴侣';
   if (a.ph.trophic === 'carnivore' && b.ph.trophic !== 'carnivore') return '掠食者和小生命无法结为伴侣';
   if (b.ph.trophic === 'carnivore' && a.ph.trophic !== 'carnivore') return '掠食者和小生命无法结为伴侣';
   return null;

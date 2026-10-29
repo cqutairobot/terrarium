@@ -18,6 +18,7 @@ import { TopBar } from './components/TopBar';
 import { Tutorial } from './components/Tutorial';
 import { WorldPanel } from './components/WorldPanel';
 import { LevelHud, LevelIntro, LevelResultCard, LevelsPanel } from './components/Levels';
+import { itemById } from '../game/economy';
 import { Icon } from './icons';
 import { useEngineVersion } from './useEngine';
 
@@ -145,6 +146,7 @@ export function App({ engine, wallpaper }: { engine: Engine; wallpaper: boolean 
           break;
         case 'Escape':
           if (engine.aiming) engine.aim(null);
+          else if (engine.placing) engine.cancelPlacing();
           else if (engine.pairing || engine.pairOffer) engine.cancelPairing();
           else if (engine.lostFollow) engine.dismissLost();
           else if (panel) setPanel(null);
@@ -212,6 +214,7 @@ export function App({ engine, wallpaper }: { engine: Engine; wallpaper: boolean 
       {!hidden && engine.pairOffer && <PairOfferCard engine={engine} />}
 
       {!hidden && engine.aiming === 'meteor' && <div className="aim-hint glass">点击水中，选择流星坠落的地方 · 右键或 Esc 取消</div>}
+      {!hidden && engine.placing && <div className="aim-hint glass">点击缸底，放下「{itemById(engine.placing)?.name}」 · 右键或 Esc 取消</div>}
 
       {!hidden && captions && <Captions engine={engine} />}
       {!hidden && !engine.catchUp && !engine.away && !level && <Tutorial engine={engine} panel={panel} />}

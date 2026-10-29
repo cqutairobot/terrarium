@@ -137,7 +137,15 @@ export function createProducer(
   hue: number,
 ): Producer {
   const lifespan =
-    kind === 'plant' ? rng.range(2400, 5400) : kind === 'algae' ? rng.range(500, 1100) : rng.range(600, 1500);
+    kind === 'plant'
+      ? rng.range(2400, 5400)
+      : kind === 'algae'
+        ? rng.range(500, 1100)
+        : kind === 'moss'
+          ? rng.range(2600, 5200)
+          : kind === 'anemone'
+            ? rng.range(6000, 10000)
+            : rng.range(600, 1500);
   return {
     id,
     kind,

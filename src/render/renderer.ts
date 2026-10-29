@@ -4,10 +4,11 @@ import type { World } from '../sim/world';
 import { Background } from './background';
 import { Camera } from './camera';
 import { createVisual, drawCreature, drawEgg, type CreatureVisual, type DrawOpts } from './creatureRenderer';
+import { drawDecor, drawDecorGlow } from './decorRenderer';
 import { Effects } from './effects';
 import { drawCorpse, drawFood, drawSeed } from './itemsRenderer';
 import { Ambience } from './particles';
-import { drawAlgae, drawFungus, drawPlant } from './producersRenderer';
+import { drawAlgae, drawAnemone, drawFungus, drawMoss, drawPlant } from './producersRenderer';
 import { drawSprite, glowSprite } from './sprites';
 import { TerrainRenderer } from './terrainRenderer';
 import { WeatherRenderer } from './weatherRenderer';
@@ -137,10 +138,13 @@ export class Renderer {
 
     for (const p of world.producers) {
       if (p.kind === 'fungus' && inView(p.x, p.y)) drawFungus(ctx, world, p, vt);
+      else if (p.kind === 'moss' && inView(p.x, p.y)) drawMoss(ctx, world, p);
     }
+    for (const d of world.decor) if (inView(d.x, d.y - 40, 80)) drawDecor(ctx, d, vt, o.night);
     for (const p of world.producers) {
       if (p.kind === 'plant' && inView(p.x, p.y - 100, 260)) drawPlant(ctx, world, p, vt, this.quality);
     }
+    for (const p of world.producers) if (p.kind === 'anemone' && inView(p.x, p.y - 20)) drawAnemone(ctx, world, p, vt);
     for (const k of world.corpses) if (inView(k.x, k.y)) drawCorpse(ctx, k, vt);
     for (const p of world.producers) {
       if (p.kind === 'algae' && inView(p.x, p.y)) drawAlgae(ctx, world, p, p.x, p.y, vt);
@@ -177,6 +181,8 @@ export class Renderer {
         }
       }
     }
+
+    for (const d of world.decor) if (inView(d.x, d.y - 40, 140)) drawDecorGlow(ctx, d, vt, o.night);
 
     // selection halo
     const sel = this.selectedId ? world.creatureMap.get(this.selectedId) : undefined;

@@ -1,7 +1,7 @@
 import type { Engine } from '../../engine/engine';
 import { canBuy, owned, priceOf, SHOP, type ShopGroup } from '../../game/economy';
 
-const GROUPS: ShopGroup[] = ['工具', '水缸', '生命', '水草'];
+const GROUPS: ShopGroup[] = ['工具', '水缸', '生命', '水草', '装饰'];
 
 /** Spend lumen on tools, tanks and new life. */
 export function ShopPanel({ engine }: { engine: Engine }) {

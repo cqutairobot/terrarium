@@ -1,5 +1,6 @@
 import { maxEnergyOf } from '../behavior/perception';
 import type { Creature } from '../entities/creature';
+import { temperatureAt } from '../decor';
 import { growthAt } from '../spawn';
 import type { World } from '../world';
 
@@ -47,7 +48,7 @@ export function updateMetabolism(world: World, c: Creature, dt: number): void {
 
   const g = Math.pow(c.growth, 1.5);
   const speed = Math.hypot(c.vx, c.vy);
-  const stress = thermalStress(c, env.temperature);
+  const stress = thermalStress(c, world.decor.length ? temperatureAt(world, c.x, c.y) : env.temperature);
   const crowd = c.stress;
   let basal = cfg.basalCoeff * ph.basalFactor * g * env.q10() * (1 + Math.min(2, stress)) * (1 + 0.3 * crowd);
   if (c.state === 'rest') {

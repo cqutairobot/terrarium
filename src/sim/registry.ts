@@ -1,4 +1,4 @@
-import type { Trophic } from './genome';
+import type { Morph, Trophic } from './genome';
 
 /** A species: a reproductively coherent cluster of genomes, tracked over time. */
 export interface SpeciesRecord {
@@ -16,6 +16,8 @@ export interface SpeciesRecord {
   extinctAt: number | null;
   /** Population milestones already announced. */
   milestones: number[];
+  /** Body plan of the species (absent: fish). */
+  morph?: Morph;
 }
 
 /** A family (家族): a line passed down through the initiating parent. */

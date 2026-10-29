@@ -21,9 +21,12 @@ import type { Creature } from '../sim/entities/creature';
 import { FOOD_LABELS, type FoodKind } from '../sim/entities/food';
 import { DISASTER_LABELS, type DisasterKind } from '../sim/environment';
 import { cloneGenome, G } from '../sim/genome';
+import { FORM_ARCHETYPES } from '../sim/archetypes';
+import type { BiomeId } from '../sim/biomes';
+import { MAX_DECOR, placeDecor, removeDecor, type DecorKind } from '../sim/decor';
 import { emigrate, hatchGenome, immigrate } from '../sim/migration';
 import { rareTraitKeys } from '../sim/rareTraits';
-import { introduceFounders, scatterSeeds } from '../sim/systems/ecology';
+import { introduceFounders, plantAnemone, plantMoss, scatterSeeds } from '../sim/systems/ecology';
 import { restoreWorld, snapshotWorld } from '../sim/serialize';
 import { SIM_DT, World } from '../sim/world';
 import { CatchUpRunner } from './catchUp';
@@ -122,6 +125,8 @@ export class Engine {
   lumenPops: LumenPop[] = [];
   /** Pinches of food scattered this session (the tutorial watches it). */
   feeds = 0;
+  /** Something bought that waits to be set down (shop item id; the next click on the floor places it). */
+  placing: string | null = null;
   /** A challenge being played; the garden tank waits in storage (and lives on) meanwhile. */
   level: LevelRun | null = null;
   levelPhase: LevelPhase = 'intro';
@@ -824,6 +829,18 @@ export class Engine {
       return;
     }
     const price = priceOf(this.profile, item);
+    if (item.place) {
+      if (id.startsWith('decor:') && this.world.decor.length >= MAX_DECOR) {
+        this.toast(`一个水缸最多放 ${MAX_DECOR} 件装饰`);
+        return;
+      }
+      // paid for when it is set down
+      this.aiming = null;
+      this.placing = id;
+      this.toast(`点击缸底，放下「${item.name}」 · 右键或 Esc 取消`);
+      this.publish();
+      return;
+    }
     if (item.kind === 'goods') {
       const ok = this.deliver(id);
       if (!ok) {
@@ -841,12 +858,14 @@ export class Engine {
 
   private deliver(id: string): boolean {
     if (id === 'seeds') return scatterSeeds(this.world, 6) > 0;
+    if (id === 'moss') return plantMoss(this.world, 6) > 0;
     if (id.startsWith('founders:')) {
       const key = id.slice('founders:'.length);
       const predator = key === 'glider' || key === 'lurker';
+      const count = predator ? 2 : (FORM_ARCHETYPES.find((a) => a.key === key)?.count ?? 6);
       const room = this.world.cfg.maxCreatures - this.world.creatures.length;
-      if (room < (predator ? 2 : 6)) return false;
-      return introduceFounders(this.world, key, predator ? 2 : 6).length > 0;
+      if (room < count) return false;
+      return introduceFounders(this.world, key, count).length > 0;
     }
     return false;
   }
@@ -951,7 +970,7 @@ export class Engine {
   }
 
   /** A new tank with a fresh world, shown right away. */
-  async createTank(seed?: string, name?: string, from?: World): Promise<void> {
+  async createTank(seed?: string, name?: string, from?: World, biome: BiomeId = 'shallows'): Promise<void> {
     if (this.level) return;
     if (this.busy) return;
     if (!this.canAddTank()) {
@@ -962,7 +981,8 @@ export class Engine {
     try {
       await this.saveActive();
       const aspect = window.innerWidth / Math.max(1, window.innerHeight);
-      const w = from ?? new World({ seed: seed?.trim() || randomSeed(), aspect, name: name?.trim() || undefined });
+      if (biome !== 'shallows' && !has(this.profile, `biome:${biome}`)) biome = 'shallows';
+      const w = from ?? new World({ seed: seed?.trim() || randomSeed(), aspect, name: name?.trim() || undefined, biome });
       const now = Date.now();
       const id = addTank(this.profile, w, now);
       await this.storage.put(tankRecord(w, id, now));
@@ -1107,6 +1127,50 @@ export class Engine {
     } catch (err) {
       this.toast('导入失败：' + String((err as Error)?.message ?? err));
     }
+  }
+
+  // ------------------------------------------------------------ decorations
+
+  /** Set what was bought down where the player clicked (its price is paid now). */
+  async placeAt(x: number): Promise<void> {
+    const id = this.placing;
+    this.placing = null;
+    const item = id ? itemById(id) : undefined;
+    if (!id || !item || this.level) {
+      this.publish();
+      return;
+    }
+    const price = priceOf(this.profile, item);
+    if (this.profile.lumen < price) {
+      this.toast('灵光不够');
+      return;
+    }
+    if (id.startsWith('decor:')) {
+      if (!placeDecor(this.world, id.slice('decor:'.length) as DecorKind, x)) {
+        this.toast(`一个水缸最多放 ${MAX_DECOR} 件装饰`);
+        return;
+      }
+    } else if (id === 'anemone' && !plantAnemone(this.world, x)) {
+      this.toast('水里的养分不够，过一会儿再试试');
+      return;
+    }
+    this.profile.lumen -= price;
+    this.profileDirty = true;
+    this.toast(`「${item.name}」放好了`);
+    await this.saveActive();
+    this.publish();
+  }
+
+  cancelPlacing(): void {
+    this.placing = null;
+    this.publish();
+  }
+
+  /** Take a decoration out of the shown tank (it is not refunded). */
+  async removeDecoration(id: number): Promise<void> {
+    if (this.level || !removeDecor(this.world, id)) return;
+    await this.saveActive();
+    this.publish();
   }
 
   // ------------------------------------------------------------ challenges

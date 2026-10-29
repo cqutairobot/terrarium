@@ -1,9 +1,10 @@
-import { CONSUMER_ARCHETYPES, PREDATOR_ARCHETYPES } from '../archetypes';
+import { CONSUMER_ARCHETYPES, FORM_ARCHETYPES, PREDATOR_ARCHETYPES } from '../archetypes';
 import { clamp } from '../core/math';
 import { cloneGenome, express, genomeFromTemplate, G, mutateGenes, type Genome } from '../genome';
 import type { Creature } from '../entities/creature';
 import { familyName, speciesName } from '../names';
-import { createCreature, createSeed } from '../spawn';
+import { createCreature, createProducer, createSeed } from '../spawn';
+import { ANEMONE_MAX_BIOMASS, MOSS_MAX_BIOMASS } from './producers';
 import type { World } from '../world';
 
 export interface BankEntry {
@@ -86,6 +87,7 @@ export function updateEcology(world: World): void {
         const x = world.rng.range(40, world.width - 40);
         const got = world.env.takeNutrient(x, world.groundAt(x) - 10, 4);
         if (got > 0.5) world.seeds.push(createSeed(world.newId(), x, world.groundAt(x) - 30, world.rng.range(-0.03, 0.03), got, world.rng));
+        else if (got > 0) world.env.addNutrient(x, world.groundAt(x) - 10, got);
       }
       world.events.push({ t: 'respawn', kind: 'plant', count: 4, fromBank: false });
       st.plantGoneAt = -1;
@@ -178,6 +180,7 @@ export function foundSpecies(world: World, genome: Genome): number {
         perception: g[G.perception],
         size: g[G.size],
         diet: g[G.diet],
+        morph: genome.morph,
       },
       taken,
     ),
@@ -191,6 +194,7 @@ export function foundSpecies(world: World, genome: Genome): number {
     totalBorn: 0,
     extinctAt: null,
     milestones: [],
+    ...(genome.morph ? { morph: genome.morph } : {}),
   });
   return id;
 }
@@ -213,7 +217,7 @@ export interface FounderOptions {
  * stays whole.
  */
 export function introduceFounders(world: World, key: string, count: number, opts: FounderOptions = {}): Creature[] {
-  const arch = [...CONSUMER_ARCHETYPES, ...PREDATOR_ARCHETYPES].find((a) => a.key === key);
+  const arch = [...CONSUMER_ARCHETYPES, ...PREDATOR_ARCHETYPES, ...FORM_ARCHETYPES].find((a) => a.key === key);
   if (!arch) return [];
   const predator = PREDATOR_ARCHETYPES.includes(arch);
   const rng = world.rng;
@@ -221,6 +225,7 @@ export function introduceFounders(world: World, key: string, count: number, opts
   const genomes: Genome[] = [];
   for (let i = 0; i < count; i++) {
     const g = genomeFromTemplate(arch.template, rng, 0.035);
+    if (arch.morph) g.morph = arch.morph;
     g.g[G.hue] = (g.g[G.hue] + shift + 1) % 1;
     opts.tweak?.(g, i);
     genomes.push(g);
@@ -229,6 +234,36 @@ export function introduceFounders(world: World, key: string, count: number, opts
   const before = new Set(world.creatures.map((c) => c.id));
   for (const g of genomes) spawnFounder(world, g, species, 0, predator, opts);
   return world.creatures.filter((c) => !before.has(c.id));
+}
+
+/** Cushions of moss set down along the floor (made of the tank's own nutrients). */
+export function plantMoss(world: World, count: number): number {
+  const rng = world.rng;
+  let n = 0;
+  for (let i = 0; i < count; i++) {
+    const x = rng.range(40, world.width - 40);
+    const got = takeAnywhere(world, MOSS_MAX_BIOMASS * 0.4);
+    if (got <= 0) break;
+    const p = createProducer(world.newId(), 'moss', x, world.groundAt(x) + 1, rng, MOSS_MAX_BIOMASS, 0, rng.range(-0.03, 0.03));
+    p.biomass = got;
+    p.age = 0;
+    world.addProducer(p);
+    n++;
+  }
+  return n;
+}
+
+/** A glowing anemone set on the floor at x (made of the tank's own nutrients). */
+export function plantAnemone(world: World, x: number): boolean {
+  const rng = world.rng;
+  const cx = clamp(x, 20, world.width - 20);
+  const got = takeAnywhere(world, ANEMONE_MAX_BIOMASS * 0.5);
+  if (got <= 0) return false;
+  const p = createProducer(world.newId(), 'anemone', cx, world.groundAt(cx) + 1, rng, ANEMONE_MAX_BIOMASS, 0, rng.range(-0.12, 0.16));
+  p.biomass = got;
+  p.age = 0;
+  world.addProducer(p);
+  return true;
 }
 
 /** A handful of plant seeds scattered from the surface (made of the tank's own nutrients). */

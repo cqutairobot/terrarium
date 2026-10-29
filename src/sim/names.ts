@@ -89,7 +89,11 @@ export interface SpeciesNameTraits {
   perception: number;
   size: number;
   diet: number;
+  /** Body plan (absent: fish). */
+  morph?: 'fish' | 'jelly' | 'shrimp' | 'snail';
 }
+
+const MORPH_SUFFIX = { jelly: '水母', shrimp: '虾', snail: '螺' } as const;
 
 /** Name a species after the traits of its founding cluster, e.g. 蓝鳍族 / 靛尾掠食者. */
 export function speciesName(t: SpeciesNameTraits, taken: ReadonlySet<string>): string {
@@ -104,7 +108,7 @@ export function speciesName(t: SpeciesNameTraits, taken: ReadonlySet<string>): s
   // name a kind after what makes it distinctive, not merely what is large
   parts.sort((a, b) => Math.abs(b[0] - 0.45) - Math.abs(a[0] - 0.45));
   const color = colorChar(t.hue);
-  const suffix = t.diet > 0.65 ? '掠食者' : t.diet > 0.35 ? '游者' : '族';
+  const suffix = t.morph && t.morph !== 'fish' ? MORPH_SUFFIX[t.morph] : t.diet > 0.65 ? '掠食者' : t.diet > 0.35 ? '游者' : '族';
   const prefixes = t.size < 0.18 ? ['', '小'] : t.size > 0.6 && t.diet <= 0.65 ? ['', '大'] : [''];
   for (const p of prefixes) {
     for (const [, part] of parts) {

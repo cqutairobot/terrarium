@@ -3,6 +3,7 @@ import type { BehaviorState, Creature } from '../entities/creature';
 import { plantHeight } from '../entities/producer';
 import type { World } from '../world';
 import { breedingPressure } from '../systems/reproduction';
+import { comfortSpot, nearestRefuge } from '../decor';
 import { canBreed, findRestSpot, maxEnergyOf, perceive, type Perception } from './perception';
 
 /**
@@ -195,8 +196,17 @@ function applyChoice(world: World, c: Creature, s: BehaviorState, p: Perception,
     case 'rest': {
       if (c.state !== 'rest') {
         const night = 1 - world.env.daylight;
-        const hide = night > 0.5 && c.ph.nocturnality < 0.5 ? findRestSpot(world, c, 260) : null;
-        if (hide) {
+        // a warm (or cool) stone when the water is uncomfortable, a hollow rock for the small
+        const cozy = world.decor.length ? comfortSpot(world, c) : null;
+        const refuge = !cozy && c.ph.trophic !== 'carnivore' ? nearestRefuge(world, c, 300) : null;
+        const hide = !cozy && !refuge && night > 0.5 && c.ph.nocturnality < 0.5 ? findRestSpot(world, c, 260) : null;
+        if (cozy) {
+          c.tx = cozy.x + rng.range(-24, 24);
+          c.ty = cozy.y - rng.range(14, 40);
+        } else if (refuge) {
+          c.tx = refuge.x + rng.range(-12, 12);
+          c.ty = refuge.y - rng.range(10, 26);
+        } else if (hide) {
           const h = plantHeight(hide);
           c.tx = hide.x + rng.range(-14, 14);
           c.ty = Math.min(hide.y - 14, hide.y - h * rng.range(0.25, 0.6));

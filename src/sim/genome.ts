@@ -76,11 +76,32 @@ export const GENE_DEFS: readonly GeneDef[] = [
 
 const WEIGHT_SUM = GENE_DEFS.reduce((s, d) => s + d.weight, 0);
 
+/** Body plan. It never mutates and is passed down whole, so different forms never interbreed. */
+export type Morph = 'fish' | 'jelly' | 'shrimp' | 'snail';
+
+export const MORPH_LABELS: Record<Morph, string> = { fish: '鱼', jelly: '水母', shrimp: '小虾', snail: '螺' };
+
 export interface Genome {
   /** Continuous genes, length N_GENES. */
   g: number[];
   /** Diploid rare alleles, length N_RARE * 2. */
   rare: number[];
+  /** Body plan (absent: a fish, as every first-version creature was). */
+  morph?: Morph;
+}
+
+export function morphOf(g: Genome): Morph {
+  return g.morph ?? 'fish';
+}
+
+/**
+ * The diet a body plan allows: bells and shells only graze, a shrimp eats
+ * whatever settles (an omnivore that never hunts).
+ */
+export function morphDiet(morph: Morph | undefined, raw: number): number {
+  if (morph === 'jelly' || morph === 'snail') return Math.min(raw, 0.2);
+  if (morph === 'shrimp') return Math.min(0.5, Math.max(0.38, raw));
+  return raw;
 }
 
 export interface MutationNote {
@@ -145,10 +166,11 @@ export interface Phenotype {
   eyeSize: number;
   antennaLen: number;
   rare: RareExpression;
+  morph: Morph;
 }
 
 export function cloneGenome(g: Genome): Genome {
-  return { g: g.g.slice(), rare: g.rare.slice() };
+  return g.morph ? { g: g.g.slice(), rare: g.rare.slice(), morph: g.morph } : { g: g.g.slice(), rare: g.rare.slice() };
 }
 
 export function geneValue(genome: Genome, key: GeneKey): number {
@@ -163,11 +185,13 @@ export function geneticDistance(a: Genome, b: Genome): number {
     const d = def.circular ? hueDist(a.g[i], b.g[i]) * 2 : a.g[i] - b.g[i];
     sum += def.weight * d * d;
   }
-  return Math.sqrt(sum / WEIGHT_SUM);
+  // different body plans are worlds apart
+  return Math.sqrt(sum / WEIGHT_SUM) + (morphOf(a) === morphOf(b) ? 0 : 1);
 }
 
 /** Probability that two genomes produce viable offspring. */
 export function compatibility(a: Genome, b: Genome, compatDistance: number): number {
+  if (morphOf(a) !== morphOf(b)) return 0;
   const d = geneticDistance(a, b) / compatDistance;
   return Math.exp(-(d * d * d * d));
 }
@@ -242,7 +266,8 @@ export function breed(a: Genome, b: Genome, rng: Rng, p: MutationParams, rareMul
   const g = crossover(a, b, rng);
   const notes = mutateGenes(g, rng, p);
   const rare = inheritRare(a.rare, b.rare, rng, rareMultiplier);
-  return { genome: { g, rare: rare.alleles }, notes, newRare: rare.newMutations };
+  const genome: Genome = a.morph ? { g, rare: rare.alleles, morph: a.morph } : { g, rare: rare.alleles };
+  return { genome, notes, newRare: rare.newMutations };
 }
 
 export type GeneTemplate = Partial<Record<GeneKey, number>>;
@@ -278,6 +303,10 @@ export function express(genome: Genome): Phenotype {
   const g = genome.g;
   const v = (k: GeneKey) => g[G[k]];
   const rare = expressRare(genome.rare);
+  const morph = morphOf(genome);
+  const jelly = morph === 'jelly';
+  const shrimp = morph === 'shrimp';
+  const snail = morph === 'snail';
 
   const size = v('size');
   const armor = v('armor');
@@ -287,53 +316,58 @@ export function express(genome: Genome): Phenotype {
   const fin = v('finSize');
   const tentGene = v('tentacles');
   const eye = v('eyeSize');
-  const diet = v('diet');
+  const diet = morphDiet(morph, v('diet'));
   const brightness = v('brightness');
   const noct = v('nocturnality');
 
-  const radius = 4.5 + 21 * Math.pow(size, 1.2);
+  const radius = (4.5 + 21 * Math.pow(size, 1.2)) * (shrimp ? 0.78 : 1);
   const rel = radius / 6;
   const mass = rel * rel * (1 + 0.35 * armor);
   const M = 0.3 + 1.25 * metab;
 
-  const tentacleCount = Math.min(6, Math.floor(tentGene * 7)) + rare.extraTentacles;
+  // a bell trails many more threads than a fish has feelers
+  const tentacleCount = (jelly ? 6 + Math.floor(tentGene * 6.99) : Math.min(6, Math.floor(tentGene * 7))) + rare.extraTentacles;
   const twin = rare.twinTail ? 1 : 0;
 
   // locomotion: thrust from tail and body shape, armor weighs it down
+  // a bell pulses slowly, a snail creeps, a shrimp darts
+  const form = jelly ? { speed: 0.45, accel: 0.5, turn: 0.6 } : snail ? { speed: 0.22, accel: 0.5, turn: 0.5 } : shrimp ? { speed: 1.05, accel: 1.6, turn: 1.3 } : { speed: 1, accel: 1, turn: 1 };
   const maxSpeed =
     (28 + 52 * v('speed')) *
     Math.pow(rel, 0.22) *
     (1 + 0.1 * (elong - 1)) *
     (1 + 0.12 * tail) *
     (1 - 0.3 * armor) *
-    (1 + 0.08 * twin);
-  const accel = maxSpeed * (1.2 + 0.8 * M);
-  const turnRate = (3.0 + 2.2 * fin) / (0.7 + 0.3 * elong);
+    (1 + 0.08 * twin) *
+    form.speed;
+  const accel = maxSpeed * (1.2 + 0.8 * M) * form.accel;
+  const turnRate = ((3.0 + 2.2 * fin) / (0.7 + 0.3 * elong)) * form.turn;
 
   const special = rare.eyeType > 0 ? 1 : 0;
-  const senseRadius = (60 + 200 * v('perception')) * (1 + 0.25 * eye) * Math.pow(rel, 0.15);
+  const senseRadius = (60 + 200 * v('perception')) * (1 + 0.25 * eye) * Math.pow(rel, 0.15) * (snail ? 0.6 : jelly ? 0.8 : 1);
   const nightVision = Math.min(1.2, 0.4 + 0.4 * eye + 0.3 * noct + 0.25 * special);
 
   // energetics (Kleiber) — appendages cost drag and upkeep
   const drag = (1 + 0.04 * tentacleCount) * (1 + 0.08 * fin) * (1 + 0.1 * twin) * (1 + 0.05 * tail);
-  const basalFactor = Math.pow(mass, 0.7) * M * (1 + 0.25 * armor);
-  const upkeep = 0.015 * eye + 0.02 * special + 0.005 * tentacleCount;
-  const moveCoeff = Math.pow(mass, 0.75) * drag;
+  const basalFactor = Math.pow(mass, 0.7) * M * (1 + 0.25 * armor) * (jelly ? 0.75 : snail ? 0.6 : 1);
+  const upkeep = 0.015 * eye + 0.02 * special + (jelly ? 0.002 : 0.005) * tentacleCount;
+  const moveCoeff = Math.pow(mass, 0.75) * drag * (jelly ? 0.45 : snail ? 1.2 : 1);
   const senseCost = 0.00025 * senseRadius;
 
-  const lifespan = (LIFESPAN_SCALE * (360 + 780 * v('longevity')) * Math.pow(rel, 0.55)) / Math.sqrt(M);
+  const lifespan = ((LIFESPAN_SCALE * (360 + 780 * v('longevity')) * Math.pow(rel, 0.55)) / Math.sqrt(M)) * (snail ? 1.4 : jelly ? 0.85 : 1);
   // game pacing: the young come of age quickly, so a bred line shows its next generation within minutes
   const maturityAge = lifespan * MATURITY_FRACTION * (1.15 - 0.3 * metab);
 
   const fert = v('fertility');
   const reproThreshold = 0.5 + 0.2 * (1 - fert);
   const investFraction = 0.35 + 0.4 * (1 - fert);
-  const reproCooldown = ((COOLDOWN_BASE + COOLDOWN_K * (1 - fert)) * Math.sqrt(rel)) / M;
+  const reproCooldown = (((COOLDOWN_BASE + COOLDOWN_K * (1 - fert)) * Math.sqrt(rel)) / M) * (shrimp ? 0.85 : 1);
   const twinChance = 0.25 * fert * fert;
 
   const aggression = v('aggression');
   const attack = (6 + 14 * aggression) * Math.pow(mass, 0.7) * (1 + 0.5 * diet);
-  const defense = 0.6 * armor;
+  // shells: a snail's is a fortress, a shrimp's a coat of mail
+  const defense = Math.min(0.9, 0.6 * armor + (snail ? 0.35 : shrimp ? 0.12 : 0));
 
   const herbEff = 0.85 * Math.pow(1 - diet, 1.6);
   const carnEff = 0.9 * Math.pow(diet, 1.6);
@@ -341,13 +375,13 @@ export function express(genome: Genome): Phenotype {
   const tentacleLen = 1.2 + 1.6 * tentGene;
   const reach = radius * (0.7 + 0.12 * tentacleCount * Math.min(1, tentacleLen / 2));
 
-  let visibility = 0.85 + 0.5 * brightness;
+  let visibility = (0.85 + 0.5 * brightness) * (jelly ? 0.75 : snail ? 0.8 : 1);
   if (rare.golden) visibility += 0.35;
   if (rare.rainbow) visibility += 0.35;
   if (rare.translucent) visibility -= 0.35;
   const attractiveness = 0.6 + 0.6 * brightness;
 
-  const maxHealth = 100 * Math.pow(mass, 0.8) * (1 + 0.6 * armor) * (rare.translucent ? 0.85 : 1);
+  const maxHealth = 100 * Math.pow(mass, 0.8) * (1 + 0.6 * armor) * (rare.translucent ? 0.85 : 1) * (snail ? 1.3 : 1);
 
   const hue = v('hue');
   return {
@@ -402,5 +436,6 @@ export function express(genome: Genome): Phenotype {
     eyeSize: 0.7 + 0.7 * eye,
     antennaLen: v('perception'),
     rare,
+    morph,
   };
 }

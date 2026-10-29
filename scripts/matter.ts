@@ -31,7 +31,7 @@ while (world.time < hours * 3600) {
   }
   if (world.time >= next) {
     next += every;
-    const sum = { plant: 0, algae: 0, fungus: 0 };
+    const sum = { plant: 0, algae: 0, fungus: 0, moss: 0, anemone: 0 };
     for (const p of world.producers) sum[p.kind] += p.biomass;
     let consS = 0, consE = 0, predS = 0, predE = 0, eggs = 0, n = 0, r = 0;
     for (const c of world.creatures) {

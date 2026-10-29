@@ -19,7 +19,7 @@ function targetGap(world: World, c: Creature): number {
         const dy = c.y < top ? top - c.y : c.y > p.y ? c.y - p.y : 0;
         return Math.max(0, Math.hypot(dx, dy) - reach - 6);
       }
-      const py = p.kind === 'fungus' ? p.y - 6 : p.y;
+      const py = p.kind === 'algae' ? p.y : p.y - (p.kind === 'moss' ? 4 : 6);
       return Math.max(0, Math.hypot(c.x - p.x, c.y - py) - reach - 8);
     }
     case 'food': {
@@ -37,8 +37,40 @@ function targetGap(world: World, c: Creature): number {
   }
 }
 
+/** A shrimp picks over the floor as it goes: whatever has settled there is food. */
+function scavenge(world: World, c: Creature, dt: number): void {
+  if (c.state === 'flee' || world.groundAt(c.x) - c.y > 34) return;
+  const room = maxEnergyOf(c) - c.energy;
+  if (room <= 0.5) return;
+  const env = world.env;
+  const i = env.cellIndex(c.x, c.y);
+  const eff = 0.6;
+  const got = Math.min(env.detritus[i], c.ph.biteRate * c.growth * dt * 0.35, room / eff);
+  if (got <= 1e-6) return;
+  env.detritus[i] -= got;
+  c.energy += got * eff;
+  env.addNutrient(c.x, c.y, got * (1 - eff));
+  if (c.firstMealT < 0) c.firstMealT = world.time;
+}
+
+/** A bell strains the water as it drifts: a little of what is dissolved there feeds it. */
+function filterFeed(world: World, c: Creature, dt: number): void {
+  const room = maxEnergyOf(c) - c.energy;
+  if (room <= 0.5) return;
+  const env = world.env;
+  const i = env.cellIndex(c.x, c.y);
+  const eff = 0.5;
+  const got = Math.min(env.nutrient[i] * 0.5, c.ph.biteRate * c.growth * dt * 0.08, room / eff);
+  if (got <= 1e-6) return;
+  env.nutrient[i] -= got;
+  c.energy += got * eff;
+  env.addNutrient(c.x, c.y, got * (1 - eff));
+}
+
 /** Switch foragers into eating when they reach food, and let eaters take bites. */
 export function updateFeeding(world: World, c: Creature, dt: number): void {
+  if (c.ph.morph === 'shrimp') scavenge(world, c, dt);
+  else if (c.ph.morph === 'jelly') filterFeed(world, c, dt);
   if (c.state !== 'forage' && c.state !== 'eat') return;
   if (c.targetKind === 'point' || c.targetKind === 'none') return;
   const gap = targetGap(world, c);

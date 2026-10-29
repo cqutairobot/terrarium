@@ -1,4 +1,5 @@
 import type { Engine } from '../../engine/engine';
+import { BIOMES } from '../../sim/biomes';
 import { DISASTER_LABELS } from '../../sim/environment';
 import { formatDuration, worldClock } from '../format';
 import { Icon } from '../icons';
@@ -24,6 +25,7 @@ export function TopBar({ engine }: { engine: Engine }) {
             >
               <span className="tank-name">{active ? w.name : t.name}</span>
               {t.kind === 'nursery' && <span className="tank-kind">育种</span>}
+              {t.biome !== 'shallows' && t.biome in BIOMES && <span className="tank-kind">{t.biome === 'abyss' ? '深渊' : '珊瑚'}</span>}
               <span className="tank-pop">{active ? w.consumerCount + w.predatorCount : t.population}</span>
             </button>
           );

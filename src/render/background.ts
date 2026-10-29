@@ -17,6 +17,9 @@ interface Ray {
 
 const COLD: RGB = hexToRgb('#1f4f78');
 const WARM: RGB = hexToRgb('#4f7a52');
+/** The colour of each kind of water, laid over the day and night. */
+const ABYSS: RGB = hexToRgb('#0a1532');
+const REEF: RGB = hexToRgb('#1f96a0');
 
 /** Screen-space water: gradient, distant silhouettes, light shafts, caustics, vignette. */
 export class Background {
@@ -59,8 +62,12 @@ export class Background {
       let c = mixRgb(WATER_NIGHT[i], WATER_DAY[i], d * lightK);
       c = mixRgb(c, WATER_DUSK[i], dusk * 0.45);
       c = mixRgb(c, WATER_STORM[i], storm * 0.55);
-      if (t < 0.4) c = mixRgb(c, COLD, (0.4 - t) * 0.35);
-      if (t > 0.6) c = mixRgb(c, WARM, (t - 0.6) * 0.3);
+      if (world.biome === 'abyss') c = mixRgb(c, ABYSS, 0.42);
+      else if (world.biome === 'reef') c = mixRgb(c, REEF, 0.18 + 0.2 * d);
+      else {
+        if (t < 0.4) c = mixRgb(c, COLD, (0.4 - t) * 0.35);
+        if (t > 0.6) c = mixRgb(c, WARM, (t - 0.6) * 0.3);
+      }
       this.colors[i] = c;
     }
   }

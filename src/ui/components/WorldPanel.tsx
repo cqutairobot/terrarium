@@ -1,4 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
+import { has } from '../../game/economy';
+import { BIOMES, type BiomeId } from '../../sim/biomes';
+import { DECOR_LABELS, MAX_DECOR } from '../../sim/decor';
 import type { Engine } from '../../engine/engine';
 import { tankLimit } from '../../game/profile';
 import type { SaveMeta } from '../../persist/storage';
@@ -13,6 +16,8 @@ export function WorldPanel({ engine }: { engine: Engine }) {
   const [saves, setSaves] = useState<SaveMeta[]>([]);
   const [seed, setSeed] = useState('');
   const [name, setName] = useState('');
+  const [biome, setBiome] = useState<BiomeId>('shallows');
+  const waters = (Object.keys(BIOMES) as BiomeId[]).filter((b) => b === 'shallows' || has(engine.profile, `biome:${b}`));
   const [confirm, setConfirm] = useState<{ kind: 'reset' } | { kind: 'load' | 'delete'; id: string; label: string } | null>(null);
   const [renaming, setRenaming] = useState<{ id: string; text: string } | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -115,11 +120,21 @@ export function WorldPanel({ engine }: { engine: Engine }) {
             <input className="field" placeholder="种子（留空则随机）" value={seed} onChange={(e) => setSeed(e.target.value)} />
             <input className="field" placeholder="名字（可选）" value={name} onChange={(e) => setName(e.target.value)} />
           </div>
+          {waters.length > 1 && (
+            <div className="biome-pick">
+              {waters.map((b) => (
+                <button key={b} className={`chip-btn ${biome === b ? 'on' : ''}`} title={BIOMES[b].desc} onClick={() => setBiome(b)}>
+                  {BIOMES[b].name}
+                </button>
+              ))}
+            </div>
+          )}
+          {waters.length > 1 && <div className="muted small">{BIOMES[biome].desc}</div>}
           <div className="btn-row">
             <button
               className="btn"
               onClick={() => {
-                void engine.createTank(seed, name);
+                void engine.createTank(seed, name, undefined, biome);
                 setSeed('');
                 setName('');
               }}
@@ -131,6 +146,28 @@ export function WorldPanel({ engine }: { engine: Engine }) {
         </>
       ) : (
         <div className="muted small">水缸已经满了。放下一个旧水缸，才能再养一个新的。</div>
+      )}
+
+      {engine.world.decor.length > 0 && (
+        <>
+          <div className="section-title">
+            <span>这个水缸的装饰</span>
+            <span className="muted small">
+              {engine.world.decor.length} / {MAX_DECOR}
+            </span>
+          </div>
+          <div className="decor-list">
+            {engine.world.decor.map((d) => (
+              <div key={d.id} className="decor-row">
+                <span>{DECOR_LABELS[d.kind]}</span>
+                <span className="muted small">离左边 {Math.round((d.x / engine.world.width) * 100)}%</span>
+                <button className="link quiet" onClick={() => void engine.removeDecoration(d.id)}>
+                  收起
+                </button>
+              </div>
+            ))}
+          </div>
+        </>
       )}
 
       <div className="section-title">快照与文件</div>

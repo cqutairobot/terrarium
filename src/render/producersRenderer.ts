@@ -197,3 +197,86 @@ export function drawFungus(ctx: CanvasRenderingContext2D, world: World, p: Produ
     }
   }
 }
+
+/** A soft cushion of moss on the floor, swelling as it grows. */
+export function drawMoss(ctx: CanvasRenderingContext2D, world: World, p: Producer): void {
+  const night = 1 - world.env.daylight;
+  const fill = Math.sqrt(Math.max(0, p.biomass) / p.maxBiomass);
+  if (fill < 0.05) return;
+  const w = 10 + 9 * fill;
+  const h = 2 + 6 * fill;
+  const dim = 1 - 0.4 * night;
+  const hue = 0.27 + p.hue + (hash32(p.id) - 0.5) * 0.04;
+  const lumps = 4;
+  for (let i = 0; i < lumps; i++) {
+    const r0 = hash32(p.id * 13 + i);
+    const lx = p.x + (i - (lumps - 1) / 2) * w * 0.42 + (r0 - 0.5) * 3;
+    const lh = h * (0.7 + 0.5 * r0);
+    ctx.fillStyle = hsl(hue + r0 * 0.03, 0.42, (0.2 + 0.1 * r0 + 0.08 * fill) * dim, 0.95);
+    ctx.beginPath();
+    ctx.ellipse(lx, p.y - lh * 0.45, w * 0.32, lh, 0, Math.PI, Math.PI * 2);
+    ctx.fill();
+  }
+  // a few lighter tips
+  ctx.fillStyle = hsl(hue + 0.04, 0.5, 0.42 * dim, 0.8);
+  for (let i = 0; i < 5; i++) {
+    const r0 = hash32(p.id * 29 + i);
+    ctx.beginPath();
+    ctx.arc(p.x + (r0 - 0.5) * w * 1.4, p.y - h * (0.5 + 0.6 * hash32(p.id + i * 7)), 0.9 + fill, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
+/** An anemone: a short column with a crown of swaying arms that glow in the dark. */
+export function drawAnemone(ctx: CanvasRenderingContext2D, world: World, p: Producer, vt: number): void {
+  const night = 1 - world.env.daylight;
+  const fill = Math.sqrt(Math.max(0, p.biomass) / p.maxBiomass);
+  if (fill < 0.05) return;
+  const hue = 0.88 + p.hue;
+  const colH = 6 + 10 * fill;
+  const crown = 8 + 14 * fill;
+  const rustle = p.grazed < 1.5 ? (1.5 - p.grazed) * 2 : 0;
+  // column
+  const g = ctx.createLinearGradient(0, p.y, 0, p.y - colH);
+  g.addColorStop(0, hsl(hue, 0.35, 0.28));
+  g.addColorStop(1, hsl(hue, 0.45, 0.48));
+  ctx.fillStyle = g;
+  ctx.beginPath();
+  ctx.moveTo(p.x - 5 - 2 * fill, p.y);
+  ctx.quadraticCurveTo(p.x - 6, p.y - colH * 0.6, p.x - 4, p.y - colH);
+  ctx.lineTo(p.x + 4, p.y - colH);
+  ctx.quadraticCurveTo(p.x + 6, p.y - colH * 0.6, p.x + 5 + 2 * fill, p.y);
+  ctx.closePath();
+  ctx.fill();
+  // arms
+  const arms = 9 + Math.floor(hash32(p.id) * 5);
+  ctx.lineCap = 'round';
+  for (let i = 0; i < arms; i++) {
+    const f = i / (arms - 1);
+    const a = -Math.PI + 0.25 + f * (Math.PI - 0.5);
+    const sway = Math.sin(vt * 1.1 + i * 0.7 + p.id) * (0.25 + rustle * 0.2);
+    const len = crown * (0.75 + 0.35 * hash32(p.id * 3 + i));
+    const bx = p.x + Math.cos(a) * 4;
+    const by = p.y - colH;
+    const tx = bx + Math.cos(a + sway) * len;
+    const ty = by + Math.sin(a + sway) * len;
+    ctx.strokeStyle = hsl(hue + f * 0.06, 0.55, 0.55 + 0.15 * night, 0.92);
+    ctx.lineWidth = 1.6 + fill;
+    ctx.beginPath();
+    ctx.moveTo(bx, by);
+    ctx.quadraticCurveTo(bx + Math.cos(a) * len * 0.6, by + Math.sin(a) * len * 0.6 - 2, tx, ty);
+    ctx.stroke();
+    // glowing tips at night
+    ctx.fillStyle = hsl(hue + 0.08, 0.8, 0.75, 0.5 + 0.5 * night);
+    ctx.beginPath();
+    ctx.arc(tx, ty, 1 + fill * 0.8, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  if (night > 0.2) {
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    drawSprite(ctx, glowSprite(hue + 0.06, 0.8, 0.7), p.x, p.y - colH - crown * 0.4, crown * 2.4, 0.35 * night * fill);
+    ctx.restore();
+    ctx.globalAlpha = 1;
+  }
+}

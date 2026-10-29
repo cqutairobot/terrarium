@@ -1,6 +1,6 @@
 import { wrap01 } from '../core/math';
 import type { Creature } from '../entities/creature';
-import { G, geneticDistance, N_GENES, trophicOf } from '../genome';
+import { G, geneticDistance, morphDiet, N_GENES, trophicOf } from '../genome';
 import { speciesName } from '../names';
 import type { World } from '../world';
 
@@ -43,7 +43,7 @@ export function updateSpecies(world: World): void {
     if (!rec) continue;
     rec.centroid = meanGenes(members);
     rec.hue = rec.centroid[G.hue];
-    rec.trophic = trophicOf(rec.centroid[G.diet]);
+    rec.trophic = trophicOf(morphDiet(rec.morph, rec.centroid[G.diet]));
     if (members.length >= 16) trySplit(world, sid, members);
   }
 }
@@ -99,11 +99,12 @@ function trySplit(world: World, sid: number, members: Creature[]): void {
         perception: v('perception'),
         size: v('size'),
         diet: v('diet'),
+        morph: parent.morph,
       },
       taken,
     ),
     hue: v('hue'),
-    trophic: trophicOf(v('diet')),
+    trophic: trophicOf(morphDiet(parent.morph, v('diet'))),
     foundedAt: world.time,
     parentSpecies: parent.id,
     centroid,
@@ -112,6 +113,7 @@ function trySplit(world: World, sid: number, members: Creature[]): void {
     totalBorn: 0,
     extinctAt: null,
     milestones: [],
+    ...(parent.morph ? { morph: parent.morph } : {}),
   });
   parent.population -= small.length;
   for (const c of small) c.speciesId = id;

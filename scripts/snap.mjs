@@ -1,7 +1,7 @@
 /**
  * Visual + runtime check with the pre-installed Playwright Chromium.
  *   npm run build && node scripts/snap.mjs [--seed eden] [--size 1920x1080] [--out snapshots]
- *     [--scenario basic|zoom|soul|companion] [--quality auto|0|1|2]
+ *     [--scenario basic|zoom|soul|companion|tanks|breeding|levels|forms|waters] [--quality auto|0|1|2]
  * Serves dist/ with `vite preview`, takes screenshots at several moments,
  * measures frame rate and reports console errors.
  */
@@ -390,6 +390,90 @@ try {
         return { level: !!e.level, seed: e.world.seed, record: e.profile.levels['1-1'] };
       });
       console.log(`[${size}] after reload: ${JSON.stringify(reloaded)}`);
+    }
+    if (scenario === 'forms') {
+      // step 4: the other body plans, bought from the shop and watched up close
+      const forms = await page.evaluate(async () => {
+        const e = window.__eden;
+        e.skipTutorial();
+        e.earn(400, '测试用的灵光');
+        for (const id of ['founders:jelly', 'founders:shrimp', 'founders:snail']) await e.buy(id);
+        const by = {};
+        for (const c of e.world.creatures) if (c.ph.morph !== 'fish') by[c.ph.morph] = (by[c.ph.morph] ?? 0) + 1;
+        return by;
+      });
+      console.log(`[${size}] forms delivered: ${JSON.stringify(forms)}`);
+      await page.waitForTimeout(4000);
+      await page.screenshot({ path: `${out}/${size}-forms-wide.png` });
+      for (const morph of ['jelly', 'shrimp', 'snail']) {
+        await page.evaluate((m) => {
+          const e = window.__eden;
+          const c = e.world.creatures.find((x) => x.ph.morph === m && x.stage !== 'egg' && x.dying === 0);
+          if (c) e.follow(c.id);
+        }, morph);
+        await page.waitForTimeout(3500);
+        await page.screenshot({ path: `${out}/${size}-form-${morph}.png` });
+      }
+    }
+    if (scenario === 'waters') {
+      // step 4: new kinds of water, decorations, moss and anemones, by day and by night
+      const shot = async (name) => {
+        await page.waitForTimeout(1500);
+        await page.screenshot({ path: `${out}/${size}-${name}.png` });
+      };
+      // let a tank live for a while without waiting for it
+      const ffwd = (seconds) =>
+        page.evaluate((s) => {
+          const e = window.__eden;
+          for (let i = 0; i < s * 30; i++) e.world.step(1 / 30);
+          e.publish();
+        }, seconds);
+      await page.evaluate(async () => {
+        const e = window.__eden;
+        e.skipTutorial();
+        e.earn(3000, '测试用的灵光');
+        for (const id of ['biome:abyss', 'biome:reef']) await e.buy(id);
+      });
+      // the garden: moss, an anemone, a hollow rock, a warm stone and a lamp
+      const garden = await page.evaluate(async () => {
+        const e = window.__eden;
+        const W = e.world.width;
+        await e.buy('moss');
+        for (const [id, f] of [['anemone', 0.62], ['decor:shelter', 0.25], ['decor:warmStone', 0.45], ['decor:lamp', 0.78]]) {
+          await e.buy(id);
+          await e.placeAt(W * f);
+        }
+        const k = e.world.counts();
+        return { decor: e.world.decor.map((d) => d.kind), moss: k.moss, anemones: k.anemones, lumen: Math.round(e.profile.lumen) };
+      });
+      console.log(`[${size}] garden additions: ${JSON.stringify(garden)}`);
+      await ffwd(180);
+      await shot('garden-day');
+      await ffwd(420);
+      await shot('garden-night');
+      for (const biome of ['abyss', 'reef']) {
+        await page.evaluate(async (b) => window.__eden.createTank(undefined, undefined, undefined, b), biome);
+        await page.waitForTimeout(800);
+        const info = await page.evaluate(() => {
+          const e = window.__eden;
+          const by = {};
+          for (const c of e.world.creatures) if (c.stage !== 'egg') by[c.ph.morph] = (by[c.ph.morph] ?? 0) + 1;
+          const k = e.world.counts();
+          return { biome: e.world.biome, tankBiome: e.tank().biome, temp: e.world.env.settings.temperature, by, moss: k.moss, anemones: k.anemones };
+        });
+        console.log(`[${size}] ${biome} tank: ${JSON.stringify(info)}`);
+        await ffwd(240);
+        await shot(`${biome}-day`);
+        await ffwd(420);
+        await shot(`${biome}-night`);
+      }
+      await page.reload();
+      await page.waitForTimeout(2500);
+      const after = await page.evaluate(() => {
+        const e = window.__eden;
+        return { tanks: e.profile.tanks.map((t) => `${t.name}:${t.biome}`), biome: e.world.biome };
+      });
+      console.log(`[${size}] after reload: ${JSON.stringify(after)}`);
     }
     if (scenario === 'companion') {
       // desktop-companion behaviour: auto quality, settings, sound, still pointer, wallpaper mode

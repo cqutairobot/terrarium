@@ -1,4 +1,6 @@
 import { CONSUMER_ARCHETYPES, PREDATOR_ARCHETYPES, type Archetype } from './archetypes';
+import { biomeOf, type BiomeId } from './biomes';
+import type { Decor } from './decor';
 import { DEFAULT_CONFIG, DEFAULT_SETTINGS, type EcoConfig, type EnvSettings } from './config';
 import { clamp, wrap01 } from './core/math';
 import { Rng } from './core/rng';
@@ -7,7 +9,7 @@ import type { Corpse } from './entities/corpse';
 import type { Food } from './entities/food';
 import { plantHeight, type Producer, type Seed } from './entities/producer';
 import { Environment } from './environment';
-import { G, genomeFromTemplate, type Genome } from './genome';
+import { G, genomeFromTemplate, type GeneKey, type Genome } from './genome';
 import { familyName, speciesName, worldName } from './names';
 import { N_RARE, RARE_DEFS } from './rareTraits';
 import type { Creature, DeathCause } from './entities/creature';
@@ -17,7 +19,7 @@ import type { FamilyRecord, SpeciesRecord } from './registry';
 import { createCreature, createFood, createProducer } from './spawn';
 import { generateTerrain, groundY, type Terrain } from './terrain';
 import { updateCreatures } from './systems/creatures';
-import { bankGenome, emptyEcology, updateEcology, type EcologyState } from './systems/ecology';
+import { bankGenome, emptyEcology, introduceFounders, plantAnemone, plantMoss, updateEcology, type EcologyState } from './systems/ecology';
 import { updateItems } from './systems/items';
 import { updateProducers } from './systems/producers';
 import { updateSpecies } from './systems/species';
@@ -82,6 +84,8 @@ export interface WorldOptions {
   createdAt?: number;
   /** Plants and water only: no founding animals (a nursery waits for the player's creatures). */
   lifeless?: boolean;
+  /** The kind of water (default: the shallows). */
+  biome?: BiomeId;
 }
 
 export function worldWidthForAspect(aspect: number): number {
@@ -97,6 +101,8 @@ export class World {
   rng: Rng;
   terrain: Terrain;
   env: Environment;
+  /** The kind of water: its starting climate, its first life, its colours. */
+  biome: BiomeId;
   createdAt: number;
 
   time = 0;
@@ -110,6 +116,8 @@ export class World {
   foods: Food[] = [];
   corpses: Corpse[] = [];
   seeds: Seed[] = [];
+  /** Rocks, stones and lamps the player has set on the floor. */
+  decor: Decor[] = [];
 
   creatureMap = new Map<number, Creature>();
   producerMap = new Map<number, Producer>();
@@ -157,7 +165,8 @@ export class World {
     const gen = this.rng.fork('terrain');
     this.terrain = generateTerrain(gen, this.width, this.height);
     this.name = opts.name ?? worldName(this.rng.fork('name'));
-    const settings = { ...DEFAULT_SETTINGS, ...(opts.settings ?? {}) };
+    this.biome = biomeOf(opts.biome).id;
+    const settings = { ...DEFAULT_SETTINGS, ...biomeOf(this.biome).settings, ...(opts.settings ?? {}) };
     this.env = new Environment(this.width, this.height, this.terrain, this.cfg, settings, this.rng.fork('env'));
     this.history = new History(this);
     this.cgrid = new SpatialGrid(this.width, this.height, 80);
@@ -205,7 +214,7 @@ export class World {
     this.corpseMap.set(c.id, c);
   }
 
-  counts(): { consumers: number; predators: number; eggs: number; plants: number; algae: number; fungi: number } {
+  counts(): { consumers: number; predators: number; eggs: number; plants: number; algae: number; fungi: number; moss: number; anemones: number } {
     let consumers = 0;
     let predators = 0;
     let eggs = 0;
@@ -218,12 +227,16 @@ export class World {
     let plants = 0;
     let algae = 0;
     let fungi = 0;
+    let moss = 0;
+    let anemones = 0;
     for (const p of this.producers) {
       if (p.kind === 'plant') plants++;
       else if (p.kind === 'algae') algae++;
-      else fungi++;
+      else if (p.kind === 'fungus') fungi++;
+      else if (p.kind === 'moss') moss++;
+      else anemones++;
     }
-    return { consumers, predators, eggs, plants, algae, fungi };
+    return { consumers, predators, eggs, plants, algae, fungi, moss, anemones };
   }
 
   /** Every unit of matter in the tank (for the conservation ledger). */
@@ -496,6 +509,24 @@ export class World {
     }
     for (let i = 0; i < weights.length; i++) env.nutrient[i] = (free * weights[i]) / weightSum;
     this.rebuildGrids();
+    // what only this water starts with
+    if (!lifeless) this.populateBiome();
+  }
+
+  /** Moss, anemones and other body plans that a biome begins with (shaped to its water). */
+  private populateBiome(): void {
+    const b = biomeOf(this.biome);
+    if (b.extras.moss > 0) plantMoss(this, b.extras.moss);
+    for (let i = 0; i < b.extras.anemones; i++) plantAnemone(this, this.rng.range(60, this.width - 60));
+    for (const f of b.extras.forms) {
+      introduceFounders(this, f.arch, f.count, {
+        adult: true,
+        tweak: (g) => {
+          for (const [k, v] of Object.entries(b.genes) as [GeneKey, number][]) g.g[G[k]] = clamp(v + this.rng.normal() * 0.04, 0.02, 0.98);
+        },
+      });
+    }
+    this.rebuildGrids();
   }
 
   private populateProducers(rng: Rng): void {
@@ -534,6 +565,8 @@ export class World {
     for (const k of ['size', 'speed', 'perception', 'metabolism', 'sociability', 'nocturnality', 'thermalPref'] as const) {
       base[k] = clamp((base[k] ?? 0.5) + rng.normal() * 0.04, 0.02, 0.98);
     }
+    // life that grew up in this water fits it
+    for (const [k, v] of Object.entries(biomeOf(this.biome).genes) as [keyof typeof base, number][]) base[k] = clamp(v + rng.normal() * 0.04, 0.02, 0.98);
     const speciesId = this.newId();
     const taken = new Set([...this.species.values()].map((s) => s.name));
     const name = speciesName(
