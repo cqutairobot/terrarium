@@ -50,7 +50,13 @@ export interface RequestBoard {
   /** Local date (YYYY-MM-DD) of the current daily request. */
   dailyDate: string;
   completed: number;
-  trackers: Record<string, Tracker>;
+  trackers: Record<string, RequestTracker>;
+}
+
+/** One observed tank at a time; older saves have only `since`. */
+export interface RequestTracker extends Tracker {
+  tankId?: string;
+  lastTime?: number;
 }
 
 export const OPEN_REQUESTS = 3;
@@ -246,10 +252,23 @@ export function candidatesFor(world: World, r: Request): Creature[] {
   return world.creatures.filter((c) => matchesSpec(c, r.spec!));
 }
 
-/** How an ecology request stands in the shown tank. */
-export function ecologyStatus(world: World, board: RequestBoard, r: Request) {
+/** Clear observations when a tank is restarted, restored, or left unobserved. */
+export function resetRequestTrackers(board: RequestBoard, tankId?: string): void {
+  for (const [id, tracker] of Object.entries(board.trackers)) {
+    if (tankId === undefined || tracker.tankId === undefined || tracker.tankId === tankId) delete board.trackers[id];
+  }
+}
+
+/** How an ecology request stands in the shown tank. Pass its storage id when available. */
+export function ecologyStatus(world: World, board: RequestBoard, r: Request, tankId = `world:${JSON.stringify([world.seed, world.createdAt])}`) {
   if (!r.cond) return { met: false, progress: 0, value: 0 };
-  const tracker = (board.trackers[r.id] ??= newTracker());
+  let tracker = board.trackers[r.id];
+  // A different tank's clock, an older unbound save, or a restored past cannot
+  // establish that the condition stayed true throughout the intervening time.
+  if (!tracker || tracker.tankId !== tankId || tracker.lastTime === undefined || world.time < tracker.lastTime) {
+    tracker = board.trackers[r.id] = { ...newTracker(), tankId };
+  }
+  tracker.lastTime = world.time;
   return evaluate(world, r.cond, tracker, r.id);
 }
 
