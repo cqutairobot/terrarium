@@ -2,7 +2,7 @@ import { Ambient } from '../audio/ambient';
 import { awayFacts, summarizeAway, type AwaySummary } from '../game/away';
 import { bond, forecastBrood, pairProblem, unbond, type BroodForecast } from '../game/breeding';
 import { canBuy, itemById, priceOf, rewardFor, vitalityPerMinute } from '../game/economy';
-import { candidatesFor, closeRequest, ecologyStatus, refreshBoard } from '../game/requests';
+import { candidatesFor, closeRequest, ecologyStatus, refreshBoard, resetRequestTrackers } from '../game/requests';
 import { TUTORIAL } from '../game/tutorial';
 import type { StoryEvent } from '../sim/history/narrator';
 import { pushStory } from '../sim/history/stories';
@@ -188,6 +188,8 @@ export class Engine {
     this.renderer = new Renderer(canvas, world);
     this.loop = new Loop(SIM_DT, {
       step: (dt) => {
+        // The intro owns the start of a challenge, even if the loop is resumed.
+        if (this.level && this.levelPhase === 'intro') return;
         this.world.step(dt);
         if (this.level) this.tickLevel(dt);
       },
@@ -552,12 +554,14 @@ export class Engine {
   }
 
   setTimeScale(s: number): void {
+    if (this.level && this.levelPhase === 'intro') return;
     this.loop.timeScale = s;
     this.loop.paused = false;
     this.publish();
   }
 
   togglePause(): void {
+    if (this.level && this.levelPhase === 'intro') return;
     this.loop.paused = !this.loop.paused;
     this.publish();
   }
@@ -786,7 +790,7 @@ export class Engine {
     if (refreshBoard(board, w, Date.now())) this.profileDirty = true;
     for (const r of [...board.open]) {
       if (r.kind === 'ecology') {
-        if (ecologyStatus(w, board, r).met) this.completeRequest(r.id);
+        if (ecologyStatus(w, board, r, this.tankId).met) this.completeRequest(r.id);
       } else if (!r.ready && candidatesFor(w, r).length > 0) {
         r.ready = true;
         this.profileDirty = true;
@@ -1048,13 +1052,14 @@ export class Engine {
 
   /** Bring a snapshot back into the shown tank. */
   async load(id: string): Promise<void> {
-    if (this.level) return;
+    if (this.level || this.busy || this.catchUp) return;
     const rec = await this.storage.get(id);
     if (!rec) {
       this.toast('找不到这个快照');
       return;
     }
     try {
+      resetRequestTrackers(this.profile.requests, this.tankId);
       this.setWorld(restoreWorld(rec.snapshot));
       this.toast('已回到快照：' + rec.worldName);
       await this.saveActive();
@@ -1079,17 +1084,26 @@ export class Engine {
   /** The nursery: small, calm, no predators, and empty until the player brings someone. */
   async createNursery(): Promise<void> {
     if (this.level) return;
-    if (!has(this.profile, 'nursery') || this.nursery() || this.busy) return;
+    if (!has(this.profile, 'nursery') || this.nursery() || this.busy || this.catchUp) return;
     this.busy = true;
+    let id: string | undefined;
     try {
       const w = new World({ seed: randomSeed(), aspect: 1.3, name: '育种缸', config: { wildLife: false, maxPredators: 0 }, lifeless: true });
       const now = Date.now();
       const keep = this.profile.activeTank;
-      const id = addTank(this.profile, w, now, 'nursery');
+      id = addTank(this.profile, w, now, 'nursery');
       this.profile.activeTank = keep;
       await this.storage.put(tankRecord(w, id, now));
       await this.saveProfile();
       this.toast('育种缸准备好了：在顶部切换过去，再把选中的生命搬进来');
+    } catch (err) {
+      // Keep the permanent unlock usable if a storage failure interrupts setup.
+      if (id) {
+        this.profile.tanks = this.profile.tanks.filter((t) => t.id !== id);
+        await this.storage.remove(id).catch(() => undefined);
+      }
+      this.profileDirty = true;
+      this.toast('育种缸准备失败，可以重试：' + String((err as Error)?.message ?? err));
     } finally {
       this.busy = false;
       this.publish();
@@ -1113,6 +1127,7 @@ export class Engine {
       const now = Date.now();
       const id = addTank(this.profile, w, now);
       await this.storage.put(tankRecord(w, id, now));
+      resetRequestTrackers(this.profile.requests);
       this.tankId = id;
       this.setWorld(w);
       await this.saveProfile();
@@ -1140,6 +1155,7 @@ export class Engine {
         return;
       }
       const w = restoreWorld(rec.snapshot);
+      resetRequestTrackers(this.profile.requests);
       this.tankId = id;
       this.profile.activeTank = id;
       this.setWorld(w);
@@ -1175,8 +1191,9 @@ export class Engine {
 
   /** Let a tank go (never the one being shown, never the last one). */
   async deleteTank(id: string): Promise<void> {
-    if (id === this.tankId || this.profile.tanks.length <= 1) return;
+    if (this.level || this.busy || this.catchUp || id === this.tankId || this.profile.tanks.length <= 1) return;
     await this.storage.remove(id);
+    resetRequestTrackers(this.profile.requests, id);
     this.profile.tanks = this.profile.tanks.filter((t) => t.id !== id);
     await this.saveProfile();
     this.publish();
@@ -1272,8 +1289,22 @@ export class Engine {
 
   /** The shown tank starts over from its first day. */
   resetWorld(): void {
-    if (this.level) return;
-    const w = new World({ seed: this.world.seed, aspect: this.world.width / this.world.height, name: this.world.name });
+    if (this.level || this.busy || this.catchUp) return;
+    const info = this.tank();
+    const nursery = info.kind === 'nursery';
+    const w = new World({
+      seed: this.world.seed,
+      aspect: this.world.width / this.world.height,
+      name: this.world.name,
+      biome: this.world.biome,
+      ...(nursery ? { config: { wildLife: false, maxPredators: 0 }, lifeless: true } : {}),
+    });
+    info.biome = w.biome;
+    // A new timeline cannot reuse elapsed time or reward IDs from its predecessor.
+    info.seenEvent = w.history.chronicle.at(-1)?.id ?? 0;
+    info.vitalityT = w.time;
+    info.vitality = 0;
+    resetRequestTrackers(this.profile.requests, this.tankId);
     this.setWorld(w);
     this.toast('水缸回到了它的第一天');
     void this.saveActive();
@@ -1371,6 +1402,7 @@ export class Engine {
     this.busy = true;
     try {
       if (!this.level) await this.requireActiveSave();
+      resetRequestTrackers(this.profile.requests);
       this.openLevel(def, 'intro');
     } catch (err) {
       this.toast('进入挑战失败：' + String((err as Error)?.message ?? err));
@@ -1424,6 +1456,7 @@ export class Engine {
       this.select(0);
       const rec = await this.storage.get(this.tankId);
       const info = this.tank();
+      resetRequestTrackers(this.profile.requests, this.tankId);
       this.setWorld(rec ? restoreWorld(rec.snapshot) : new World({ seed: info?.seed ?? randomSeed() }));
       this.loop.timeScale = 1;
       this.loop.paused = false;
@@ -1514,6 +1547,8 @@ export class Engine {
       });
       if (this.world !== before) return;
       const after = restoreWorld(result.snapshot);
+      // We did not observe hold conditions during the offline simulation.
+      resetRequestTrackers(this.profile.requests, this.tankId);
       this.setWorld(after);
       this.catchUp = null;
       if (result.simulated >= 60) this.away = summarizeAway(summaryStart, after, awayMs, result.simulated, result.simulated + 1 < seconds);

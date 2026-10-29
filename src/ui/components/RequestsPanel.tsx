@@ -7,6 +7,9 @@ const LEVELS = ['', '简单', '要花点心思', '很难'];
 
 /** 委托: wishes from people around the tank, answered with real creatures and real tank states. */
 export function RequestsPanel({ engine }: { engine: Engine }) {
+  // The drawer closes after rendering when a challenge starts. Do not observe
+  // its temporary world under the garden tank's id during that transition.
+  if (engine.level) return null;
   const board = engine.profile.requests;
   return (
     <div className="panel-body">
@@ -93,7 +96,7 @@ function Delivery({ engine, r }: { engine: Engine; r: Request }) {
 }
 
 function EcologyBar({ engine, r }: { engine: Engine; r: Request }) {
-  const st = ecologyStatus(engine.world, engine.profile.requests, r);
+  const st = ecologyStatus(engine.world, engine.profile.requests, r, engine.tankId);
   return (
     <div className="catch-bar request-bar" title={`${Math.round(st.progress * 100)}%`}>
       <span style={{ width: `${st.progress * 100}%` }} />
