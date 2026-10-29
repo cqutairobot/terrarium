@@ -114,6 +114,13 @@ export function WorldPanel({ engine }: { engine: Engine }) {
           );
         })}
       </div>
+      {has(engine.profile, 'nursery') && !engine.nursery() && (
+        <div className="btn-row">
+          <button className="btn" onClick={() => void engine.createNursery()} disabled={engine.busy || engine.catchUp !== null}>
+            重新准备育种缸（免费）
+          </button>
+        </div>
+      )}
       {engine.canAddTank() ? (
         <>
           <div className="field-row">

@@ -226,7 +226,10 @@ export function evaluate(world: World, cond: Condition, tracker: Tracker = newTr
         delete tracker.since[path];
         return { met: false, progress: inner.progress * 0.5, value: 0 };
       }
-      const since = (tracker.since[path] ??= world.time);
+      // A restored world can precede the observation saved by this tracker.
+      // Restart the hold at that point instead of exposing negative progress.
+      if (tracker.since[path] === undefined || tracker.since[path] > world.time) tracker.since[path] = world.time;
+      const since = tracker.since[path];
       const held = world.time - since;
       return { met: held >= cond.seconds, progress: 0.5 + 0.5 * Math.min(1, held / Math.max(1e-6, cond.seconds)), value: held };
     }

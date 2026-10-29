@@ -69,6 +69,20 @@ describe('goal conditions', () => {
     expect(describeCondition(goal)).toBe('让小生命达到 1 只，并保持 30秒');
   });
 
+  it('starts a hold again if the world clock precedes the saved start', () => {
+    const w = emptyWorld('hold-rewind');
+    addAdult(w, herbGenome(), 300, 400);
+    const tracker = newTracker();
+    const goal = { k: 'hold', seconds: 300, cond: { k: 'population', who: 'consumer', min: 1 } } as const;
+    w.time = 1000;
+    evaluate(w, goal, tracker);
+    w.time = 100;
+    expect(evaluate(w, goal, tracker)).toEqual({ met: false, progress: 0.5, value: 0 });
+    expect(tracker.since.c).toBe(100);
+    w.time = 400;
+    expect(evaluate(w, goal, tracker)).toEqual({ met: true, progress: 1, value: 300 });
+  });
+
   it('measures the meadow and the mean of a quality', () => {
     const w = emptyWorld('meadow');
     for (let i = 0; i < 16; i++) addPlant(w, 40 + i * 110, 0.9);
