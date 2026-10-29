@@ -1000,6 +1000,9 @@ export class Engine {
     const world = this.world;
     const tankId = this.tankId;
     return this.enqueueSave(async () => {
+      // Reset/load can replace this tank while the request waits. Its old
+      // timeline must not collect rewards using the replacement's cursors.
+      if (this.tankId === tankId && this.world !== world) return;
       this.collectRewards(this.world !== world, world, tankId);
       const rec = tankRecord(world, tankId, Date.now());
       const profile = structuredClone(this.profile);

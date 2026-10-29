@@ -316,6 +316,75 @@ describe('engine persistence queue', () => {
     expect((await storage.getDoc<Profile>(PROFILE_KEY))?.tanks.find((tank) => tank.id === homeId)?.seenEvent).toBe(nextEvent.id);
   });
 
+  it('discards an old queued timeline after reset without repaying old events or skipping new low ids', async () => {
+    const { engine, storage, home, homeId } = await fixture();
+    const oldEvent = home.history.add('speciation', 3, { species: 'Already rewarded' });
+    expect(await engine.saveActive()).toBe(true);
+    expect(engine.profile.lumen).toBe(15);
+    expect(engine.profile.tanks.find((tank) => tank.id === homeId)?.seenEvent).toBe(oldEvent.id);
+
+    const writesBefore = storage.writes.length;
+    const gate = storage.holdNext();
+    const autosave = engine.saveActive();
+    await gate.entered;
+    const staleSave = engine.saveActive();
+    engine.resetWorld();
+    const resetSaved = (engine as unknown as { saveQueue: Promise<void> }).saveQueue;
+    expect(engine.world).not.toBe(home);
+    gate.release();
+    expect(await autosave).toBe(true);
+    await staleSave;
+    await resetSaved;
+
+    expect(engine.profile.lumen).toBe(15);
+    expect(engine.profile.tanks.find((tank) => tank.id === homeId)).toMatchObject({ seenEvent: 0, vitalityT: 0 });
+    expect((await storage.get(homeId))?.snapshot.time).toBe(0);
+    expect((await storage.getDoc<Profile>(PROFILE_KEY))?.lumen).toBe(15);
+    expect(storage.writes.slice(writesBefore).flatMap((write) => write.records).map((record) => record.simTime)).toEqual([30, 0]);
+
+    const newEvent = engine.world.history.add('speciation', 3, { species: 'First discovery after reset' });
+    expect(newEvent.id).toBe(oldEvent.id);
+    expect(await engine.saveActive()).toBe(true);
+    expect(engine.profile.lumen).toBe(30);
+    expect((await storage.getDoc<Profile>(PROFILE_KEY))?.tanks.find((tank) => tank.id === homeId)?.seenEvent).toBe(newEvent.id);
+  });
+
+  it('discards an old queued timeline when loading a snapshot into the same tank id', async () => {
+    const { engine, storage, home, homeId } = await fixture();
+    home.history.add('speciation', 3, { species: 'Shared rewarded past' });
+    expect(await engine.saveActive()).toBe(true);
+    const manual = tankRecord(home, 'restore-same-tank', NOW);
+    manual.snapshot.time = 10;
+    manual.simTime = 10;
+    await storage.put({ ...manual, kind: 'manual', tankId: homeId });
+
+    const writesBefore = storage.writes.length;
+    const gate = storage.holdNext();
+    const autosave = engine.saveActive();
+    await gate.entered;
+    home.time = 60;
+    const discardedEvent = home.history.add('speciation', 3, { species: 'Discarded old timeline discovery' });
+    const staleSave = engine.saveActive();
+    const loading = engine.load(manual.id);
+    await drainMicrotasks();
+    expect(engine.tankId).toBe(homeId);
+    expect(engine.world).not.toBe(home);
+    expect(engine.world.time).toBe(10);
+    gate.release();
+    expect(await autosave).toBe(true);
+    await staleSave;
+    await loading;
+
+    expect(engine.profile.lumen).toBe(15);
+    expect((await storage.get(homeId))?.snapshot.time).toBe(10);
+    expect(storage.writes.slice(writesBefore).flatMap((write) => write.records).map((record) => record.simTime)).toEqual([30, 10]);
+    expect(engine.profile.tanks.find((tank) => tank.id === homeId)?.seenEvent).toBe(1);
+    const restoredEvent = engine.world.history.add('speciation', 3, { species: 'Discovery on the restored timeline' });
+    expect(restoredEvent.id).toBe(discardedEvent.id);
+    expect(await engine.saveActive()).toBe(true);
+    expect(engine.profile.lumen).toBe(30);
+  });
+
   it.each<LeavingCommand>(['switch', 'create', 'level'])('does not %s away from a garden whose required save fails', async (command) => {
     const { engine, storage, home, homeId, destinationId } = await fixture();
     const tankIds = engine.profile.tanks.map((tank) => tank.id);
