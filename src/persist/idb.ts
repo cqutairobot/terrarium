@@ -39,10 +39,24 @@ export class IdbStorage implements StorageAdapter {
   }
 
   async put(rec: SaveRecord): Promise<void> {
-    const tx = this.db.transaction(['meta', 'worlds'], 'readwrite');
-    tx.objectStore('meta').put(toMeta(rec));
-    tx.objectStore('worlds').put({ id: rec.id, snapshot: rec.snapshot });
-    await done(tx);
+    await this.putAll([rec]);
+  }
+
+  async putAll(records: SaveRecord[], docs: Record<string, unknown> = {}): Promise<void> {
+    const tx = this.db.transaction(['meta', 'worlds', 'docs'], 'readwrite');
+    const completed = done(tx);
+    try {
+      for (const rec of records) {
+        tx.objectStore('meta').put(toMeta(rec));
+        tx.objectStore('worlds').put({ id: rec.id, snapshot: rec.snapshot });
+      }
+      for (const [key, value] of Object.entries(docs)) tx.objectStore('docs').put({ key, value });
+    } catch (err) {
+      tx.abort();
+      await completed.catch(() => undefined);
+      throw err;
+    }
+    await completed;
   }
 
   async get(id: string): Promise<SaveRecord | undefined> {

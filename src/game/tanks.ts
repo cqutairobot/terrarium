@@ -11,7 +11,8 @@ export function tankRecordId(n: number): string {
 }
 
 function population(world: World): number {
-  return world.consumerCount + world.predatorCount;
+  const counts = world.counts();
+  return counts.consumers + counts.predators;
 }
 
 /** The storage record for a tank's world. */
@@ -26,7 +27,8 @@ export function tankRecord(world: World, id: string, now: number): SaveRecord {
     simTime: world.time,
     population: population(world),
     generation: world.counters.generationsMax,
-    snapshot: snapshotWorld(world),
+    // History snapshots contain mutable collections; queued writes own their copy.
+    snapshot: structuredClone(snapshotWorld(world)),
   };
 }
 
